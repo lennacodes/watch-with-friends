@@ -4,3 +4,7 @@ renderer/bundle.js
 config/turn.json
 .cache/
 build/mac-updater/
+
+# local diagnostics and scratch output
+logs/
+work/
