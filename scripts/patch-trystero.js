@@ -61,6 +61,21 @@ patch('shared-peer.mjs', [
       const pending`],
 ])
 
+// Chromium 152 never gathers ICE again for a pooled offer peer regenerated with an ICE
+// restart (rollback + restartIce + createOffer({iceRestart})): gathering goes complete -> new
+// and stays new, so the connection dies after "exchanging SDP". Peers older than offerTtl are
+// therefore destroyed and replaced by fresh peers (checkout allocates the missing ones) rather
+// than regenerated. No timer refreshes the pool, so idle apps stay quiet.
+patch('offer-pool.mjs', [
+  ['const peer = this.pool.shift();\n\t\t\tif (!peer) break;\n\t\t\tthis.pooled.delete(peer);',
+   'const peer = this.pool.shift();\n\t\t\tif (!peer) break;\n\t\t\tthis.pooled.delete(peer);\n\t\t\tif (Date.now() - peer.created > offerTtl) {\n\t\t\t\tpeer.destroy();\n\t\t\t\tcontinue;\n\t\t\t}'],
+  ['this.recycling.add(peer);', 'if (Date.now() - peer.created > offerTtl) {\n\t\t\tpeer.destroy();\n\t\t\treturn;\n\t\t}\n\t\tthis.recycling.add(peer);'],
+  ['peer.getOffer(true).then(', 'peer.getOffer().then('],
+])
+patch('strategy.mjs', [
+  ['peer.getOffer(Date.now() - peer.created > offerTtl)', 'peer.getOffer()'],
+])
+
 // Room contexts capture getMap(appId) for their entire lifetime. Deleting an
 // empty map strands those contexts, and register() can write a replacement
 // peer into the deleted map when replacing the last connection. Keep the map

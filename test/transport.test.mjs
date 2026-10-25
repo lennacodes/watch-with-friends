@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 import {SharedPeerManager} from '../node_modules/@trystero-p2p/core/dist/shared-peer.mjs'
 import {createActionWireManager} from '../node_modules/@trystero-p2p/core/dist/action-wire.mjs'
 import {createReceiveBudget} from '../shared/receive-budget.mjs'
+import {OfferPool, offerTtl} from '../node_modules/@trystero-p2p/core/dist/offer-pool.mjs'
 import {createHandshakeManager} from '../node_modules/@trystero-p2p/core/dist/handshake.mjs'
 
 function payload(type, body = [], {last = true, nonce = 0} = {}) {
@@ -128,4 +129,41 @@ test('rooms retain a live registry after the last peer leaves and a new connecti
   assert.equal(roomRegistry['new-friend'], reconnected)
   manager.clear('app', 'new-friend', {destroyPeer: true})
   assert.deepEqual(Object.keys(roomRegistry), [], 'preserving the registry must not retain departed peers')
+})
+
+test('pooled offers older than offerTtl are replaced, never regenerated with an ICE restart', async () => {
+  const peers = []
+  const make = (age) => {
+    const peer = {
+      created: Date.now() - age, dead: false, offerCalls: [],
+      get isDead() { return this.dead },
+      destroy() { this.dead = true },
+      connection: {remoteDescription: null},
+      setHandlers() {},
+      async getOffer(restart) { this.offerCalls.push(restart); return {type: 'offer', sdp: 'x'} },
+    }
+    peers.push(peer)
+    return peer
+  }
+  let fresh = null
+  const pool = new OfferPool(() => (fresh = make(0)))
+  const stale = make(offerTtl + 1000)
+  const young = make(1000)
+  pool.active = true
+  pool.push(stale)
+  pool.push(young)
+  const records = await pool.checkout(2, false, async (peer) => peer.getOffer())
+  assert.equal(stale.dead, true, 'stale peer must be destroyed')
+  assert.deepEqual(stale.offerCalls, [], 'stale peer must never be asked for an offer')
+  assert.equal(records[0].peer, young)
+  assert.equal(records[1].peer, fresh, 'a fresh peer replaces the stale one')
+  assert.notEqual(records[1].peer, stale)
+  pool.recycle(young)
+  const stale2 = make(offerTtl + 1000)
+  pool.recycle(stale2)
+  assert.equal(stale2.dead, true, 'stale leased peers are destroyed, not ICE-restarted')
+  assert.deepEqual(stale2.offerCalls, [])
+  await new Promise((r) => setImmediate(r))
+  assert.ok(!young.offerCalls.includes(true), 'no recycled peer is restarted')
+  pool.destroy()
 })
