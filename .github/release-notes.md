@@ -1,11 +1,11 @@
-## What's new in 0.5.8
+## What's new in 0.5.9
 
-Fix shared connection recovery after a peer disconnects.
+Fix friends showing as offline when one app has been open for a while.
 
 Windows users and Mac users on 0.5.3 receive this release through the in-app updater. Mac users on 0.5.2 or earlier should install the DMG below once to enable future in-app updates.
 
-- **Keep recovered connections visible to rooms.** The transport could lose track of a replacement connection when its last peer disconnected. Existing rooms now retain the shared connection registry through disconnects and replacements.
-- **Check recovery before release.** Tests reproduce both registry failures. Real-client checks also cover one friend restarting while the other stays open, room connection with discovery unavailable, and leaving and rejoining without destroying the recovered friend connection.
+- **Connect from an app that has been open a while.** Spare connections older than a minute were refreshed in a way that never started connecting, so a friend coming online couldn't reach you (friends list, room presence and rooms all failed) until you restarted. Old spares are now replaced with fresh ones.
+- **Check it before release.** A transport test covers stale spare connections being replaced instead of reused.
 
 ## Download
 
