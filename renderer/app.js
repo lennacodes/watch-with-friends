@@ -89,6 +89,10 @@ const APP_ID = 'synced-video-player-7c1e4b-v2'
 const STATE_INTERVAL_MS = 1000
 const VIDEO_MAX_BITRATE = 10_000_000
 const AUDIO_MAX_BITRATE = 256_000
+// Browsers default a new audio capture toward mono plus voice-call processing (echo
+// cancellation, noise suppression, auto-gain) unless told otherwise — exactly wrong for sharing
+// music or system audio, which wants both channels preserved untouched.
+const SHARE_AUDIO_CONSTRAINTS = {channelCount: 2, echoCancellation: false, noiseSuppression: false, autoGainControl: false}
 const MAX_STREAM_WIDTH = 1920
 const TELEMETRY_INTERVAL_MS = 2000
 const SUBTITLE_FILE = /\.(srt|ass|ssa|vtt)$/i
@@ -932,7 +936,7 @@ async function captureShareAudio(audioDeviceId, windowId) {
     return {track: generated.track, cleanup: () => { generated.stop(); window.api.stopAppAudio(id) }}
   }
   try {
-    const micStream = await navigator.mediaDevices.getUserMedia({audio: {deviceId: {exact: audioDeviceId}}})
+    const micStream = await navigator.mediaDevices.getUserMedia({audio: {...SHARE_AUDIO_CONSTRAINTS, deviceId: {exact: audioDeviceId}}})
     const track = micStream.getAudioTracks()[0]
     return track ? {track, cleanup: () => {}} : null
   } catch (error) {
@@ -964,7 +968,7 @@ async function startShare(source) {
     const selected = await window.api.selectScreenShareSource(source.id, {systemAudio})
     if (!selected) throw new Error('That source is no longer available. Try again.')
     const video = shareVideoConstraints(shareSettings.resolution, shareSettings.frameRate)
-    const stream = await navigator.mediaDevices.getDisplayMedia({video, audio: systemAudio})
+    const stream = await navigator.mediaDevices.getDisplayMedia({video, audio: systemAudio ? SHARE_AUDIO_CONSTRAINTS : false})
     const audio = await captureShareAudio(shareSettings.audioDeviceId, windowIdFromSource(source.id))
     if (session !== current || current.closed || current.claimedAt !== claimedAt || !isHost()) {
       stream.getTracks().forEach((track) => track.stop())
