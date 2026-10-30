@@ -101,9 +101,12 @@ const pickFile = (event, name, extensions) => pickFiles(event, name, extensions)
 function registerIpc() {
   // Our own picker runs in the renderer; this only ever grants a source screenshare:sources
   // just listed and screenshare:select just accepted, never an arbitrary id from the page.
-  // System audio ('loopback') is Windows only (see Streams.audio in Electron's docs) and only
-  // when the renderer actually asked for it; elsewhere, or for a specific device, the renderer
-  // captures audio itself via getUserMedia and merges it into the share's stream.
+  // 'loopback' only when the renderer actually asked for it. Electron's own Streams.audio doc
+  // comment says this is Windows only, but that's stale: Chromium's CoreAudio Tap API backs it
+  // on macOS too as of at least Electron 44 (verified directly — a shared window's audio track
+  // comes back live, labeled "System audio"). It's whole-system audio either way, not isolated
+  // to the shared window's own app. For a specific device instead, the renderer captures it
+  // itself via getUserMedia and merges it into the share's stream.
   session.defaultSession.setDisplayMediaRequestHandler((request, callback) => {
     const id = pendingShareSourceId
     const systemAudio = pendingShareSystemAudio
@@ -111,7 +114,7 @@ function registerIpc() {
     pendingShareSystemAudio = false
     const source = id && shareSourcesById.get(id)
     if (!source) return callback({})
-    callback({video: source, ...(systemAudio && process.platform === 'win32' && {audio: 'loopback'})})
+    callback({video: source, ...(systemAudio && {audio: 'loopback'})})
   }, {useSystemPicker: false})
   ipcMain.handle('app:version', () => app.getVersion())
   ipcMain.handle('app:open-project', () => shell.openExternal('https://github.com/onlineslav/watch-with-friends'))

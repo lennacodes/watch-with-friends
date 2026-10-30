@@ -89,6 +89,7 @@
       "hardenedRuntime": false,
       "extendInfo": {
         "NSMicrophoneUsageDescription": "Lets you include a microphone or virtual audio device's sound when sharing your screen.",
+        "NSAudioCaptureUsageDescription": "Lets you include system audio when sharing your screen.",
         "SUFeedURL": "https://github.com/onlineslav/watch-with-friends/releases/latest/download/appcast-${arch}.xml",
         "SUVerifyUpdateBeforeExtraction": true,
         "SURequireSignedFeed": true,

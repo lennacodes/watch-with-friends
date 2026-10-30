@@ -23,7 +23,7 @@ export function shareSources(sources) {
 
 // A share claims host the same way opening a file does, and plays the "no timeline" role that
 // `image: {id}` plays for pictures: `id` is the claim revision as a string. `audio` records
-// whether any audio track came through: Windows loopback, or a chosen input device on any platform.
+// whether any audio track came through: whole-system loopback, or a chosen input device.
 export function cleanShare(value, claimedAt) {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) return null
   if (value.id !== String(claimedAt)) return null

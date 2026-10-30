@@ -1,7 +1,6 @@
 const {contextBridge, ipcRenderer, webUtils} = require('electron')
 
 contextBridge.exposeInMainWorld('api', {
-  platform: process.platform,
   getVersion: () => ipcRenderer.invoke('app:version'),
   openProject: () => ipcRenderer.invoke('app:open-project'),
   chooseMedia: () => ipcRenderer.invoke('dialog:media'),

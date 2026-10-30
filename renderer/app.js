@@ -886,11 +886,10 @@ function clearShare() {
   ui.sharePreview.srcObject = null
 }
 
-// Acquires the chosen audio source as its own track, separate from the display capture: a
-// specific device (a microphone, or a virtual device like BlackHole mirroring system/app audio
-// on macOS) works the same way on every platform, since getDisplayMedia's own audio is Windows
-// loopback only. Returns null for 'system' (handled by main's display-media handler instead) or
-// 'none'.
+// Acquires the chosen audio source as its own track, separate from the display capture. A
+// specific device (a mic, or a virtual device like BlackHole for routing just one app's sound)
+// works this way everywhere, as an alternative to 'system' (whole-system loopback, handled by
+// main's display-media handler instead). Returns null for 'system' or 'none'.
 async function captureShareAudioDevice(deviceId) {
   if (!deviceId || deviceId === 'system') return null
   try {
@@ -966,8 +965,8 @@ function stopShare() {
 
 // A resolution/frame rate change applies live, without restarting the capture. Audio source
 // changes restart the share (same precedent as switching which window/screen is shared): a
-// device's track can be added/removed live, but enabling Windows loopback can only be granted
-// by the original getDisplayMedia call, so there's no live path that covers both.
+// device's track can be added/removed live, but enabling system-audio loopback can only be
+// granted by the original getDisplayMedia call, so there's no live path that covers both.
 function restartShare() {
   if (session.screen) startShare(session.screen.source)
 }
@@ -3400,7 +3399,7 @@ applyZoom(zoom)
 
 // ---------- Screen sharing settings ----------
 // Persisted like uiScale; shareVideoConstraints tolerates a stale or invalid saved value.
-const DEFAULT_SHARE_SETTINGS = {resolution: DEFAULT_RESOLUTION, frameRate: DEFAULT_FRAME_RATE, audioDeviceId: window.api.platform === 'win32' ? 'system' : ''}
+const DEFAULT_SHARE_SETTINGS = {resolution: DEFAULT_RESOLUTION, frameRate: DEFAULT_FRAME_RATE, audioDeviceId: 'system'}
 let shareSettings = {...DEFAULT_SHARE_SETTINGS}
 try {
   const saved = JSON.parse(localStorage.getItem('shareSettings') || 'null')
@@ -3433,7 +3432,7 @@ async function populateAudioDevices({probe = false} = {}) {
   }
   const options = [
     {value: '', label: 'None'},
-    ...(window.api.platform === 'win32' ? [{value: 'system', label: 'System audio'}] : []),
+    {value: 'system', label: 'System audio'},
     ...audioInputs(devices).map((d) => ({value: d.deviceId, label: d.label})),
   ]
   fillSelect(ui.shareAudioDevice, options, shareSettings.audioDeviceId)
