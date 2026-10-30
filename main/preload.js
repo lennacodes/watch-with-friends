@@ -1,6 +1,7 @@
 const {contextBridge, ipcRenderer, webUtils} = require('electron')
 
 contextBridge.exposeInMainWorld('api', {
+  platform: process.platform,
   getVersion: () => ipcRenderer.invoke('app:version'),
   openProject: () => ipcRenderer.invoke('app:open-project'),
   chooseMedia: () => ipcRenderer.invoke('dialog:media'),
@@ -20,6 +21,9 @@ contextBridge.exposeInMainWorld('api', {
   readImage: (filePath) => ipcRenderer.invoke('media:image', filePath),
   screenShareSources: () => ipcRenderer.invoke('screenshare:sources'),
   selectScreenShareSource: (id, options) => ipcRenderer.invoke('screenshare:select', id, options),
+  startAppAudio: (windowId) => ipcRenderer.invoke('appaudio:start', windowId),
+  pullAppAudio: (id) => ipcRenderer.invoke('appaudio:pull', id),
+  stopAppAudio: (id) => ipcRenderer.invoke('appaudio:stop', id),
   startSession: (options) => ipcRenderer.invoke('session:start', options),
   pull: (sessionId) => ipcRenderer.invoke('session:pull', sessionId),
   stopSession: (sessionId) => ipcRenderer.invoke('session:stop', sessionId),

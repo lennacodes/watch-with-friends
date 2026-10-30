@@ -7,7 +7,7 @@
   "private": true,
   "scripts": {
     "postinstall": "node scripts/patch-trystero.js",
-    "prebundle": "node scripts/patch-trystero.js",
+    "prebundle": "node scripts/patch-trystero.js && node scripts/build-mac-app-audio.js --if-needed",
     "pretest": "node scripts/patch-trystero.js",
     "bundle": "esbuild renderer/app.js --bundle --format=iife --target=chrome130 --outfile=renderer/bundle.js",
     "start": "npm run bundle && node scripts/electron.js .",
@@ -101,6 +101,10 @@
         {
           "from": "build/mac-updater/WatchWithFriendsUpdater.app",
           "to": "updater/WatchWithFriendsUpdater.app"
+        },
+        {
+          "from": "native/mac-app-audio/mac-app-audio",
+          "to": "mac-app-audio"
         }
       ],
       "files": [

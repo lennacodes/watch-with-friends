@@ -4,6 +4,7 @@ const os = require('node:os')
 const {app, BrowserWindow, dialog, ipcMain, session, shell, desktopCapturer} = require('electron')
 const log = require('./log')
 const media = require('./media')
+const appAudio = require('./app-audio')
 const {loadIceServers} = require('./turn')
 const updater = require('./updater')
 const {focusWindow} = require('./startup')
@@ -157,6 +158,12 @@ function registerIpc() {
     pendingShareSystemAudio = Boolean(options?.systemAudio)
     return Boolean(pendingShareSourceId)
   })
+  ipcMain.handle('appaudio:start', async (_event, windowId) => {
+    if (!Number.isInteger(windowId) || windowId < 0) throw new Error('Invalid window id')
+    return appAudio.startSession(windowId)
+  })
+  ipcMain.handle('appaudio:pull', (_event, id) => appAudio.pull(id))
+  ipcMain.handle('appaudio:stop', (_event, id) => appAudio.stopSession(id))
   ipcMain.handle('session:start', async (_event, options) => {
     try {
       const started = await media.startSession(options)
@@ -246,6 +253,7 @@ function start() {
   app.on('before-quit', () => {
     updater.dispose()
     media.stopAll()
+    appAudio.stopAll()
     log.record('app', 'quit')
     log.stop()
   })

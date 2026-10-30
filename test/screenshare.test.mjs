@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import {MAX_SOURCES, MAX_SOURCE_NAME, cleanShare, hidesTimeline, shareSources, RESOLUTIONS, FRAME_RATES, DEFAULT_RESOLUTION, DEFAULT_FRAME_RATE, shareVideoConstraints, audioInputs} from '../renderer/screenshare.mjs'
+import {MAX_SOURCES, MAX_SOURCE_NAME, cleanShare, hidesTimeline, shareSources, RESOLUTIONS, FRAME_RATES, DEFAULT_RESOLUTION, DEFAULT_FRAME_RATE, shareVideoConstraints, audioInputs, windowIdFromSource} from '../renderer/screenshare.mjs'
 
 test('shareSources shapes raw desktopCapturer output for the picker and drops junk entries', () => {
   const raw = [
@@ -82,6 +82,14 @@ test('audioInputs keeps only audio input devices with a real id, and tolerates a
     {deviceId: 'mic1', label: 'Built-in Microphone'},
     {deviceId: 'blackhole', label: 'Microphone'},
   ])
+})
+
+test('windowIdFromSource extracts the numeric CGWindowID from a window source, and rejects everything else', () => {
+  assert.equal(windowIdFromSource('window:12345:0'), 12345)
+  assert.equal(windowIdFromSource('window:0:0'), 0)
+  for (const bad of ['screen:0:0', 'window:abc:0', 'window:12345', 'window:-1:0', null, undefined, 5, '']) {
+    assert.equal(windowIdFromSource(bad), null, JSON.stringify(bad))
+  }
 })
 
 test('audioInputs caps the list and tolerates non-array input', () => {

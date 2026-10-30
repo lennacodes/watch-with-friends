@@ -33,7 +33,8 @@ import {drawConfetti, launchConfetti, stepConfetti} from './confetti.mjs'
 import {REACTIONS, createRateLimiter, playReactionSound} from './reactions.mjs'
 import {clampZoom, stepZoom, parseZoom, formatZoom, zoomPercent, MIN_ZOOM, MAX_ZOOM, DEFAULT_ZOOM} from './zoom.mjs'
 import {captionHtml} from './subtitles.mjs'
-import {shareSources, hidesTimeline, RESOLUTIONS, FRAME_RATES, DEFAULT_RESOLUTION, DEFAULT_FRAME_RATE, shareVideoConstraints, audioInputs} from './screenshare.mjs'
+import {shareSources, hidesTimeline, RESOLUTIONS, FRAME_RATES, DEFAULT_RESOLUTION, DEFAULT_FRAME_RATE, shareVideoConstraints, audioInputs, windowIdFromSource} from './screenshare.mjs'
+import {createAppAudioTrack} from './app-audio.mjs'
 import {
   DRAWER,
   MAX_ITEMS,
@@ -886,15 +887,36 @@ function clearShare() {
   ui.sharePreview.srcObject = null
 }
 
-// Acquires the chosen audio source as its own track, separate from the display capture. A
-// specific device (a mic, or a virtual device like BlackHole for routing just one app's sound)
-// works this way everywhere, as an alternative to 'system' (whole-system loopback, handled by
-// main's display-media handler instead). Returns null for 'system' or 'none'.
-async function captureShareAudioDevice(deviceId) {
-  if (!deviceId || deviceId === 'system') return null
+// Acquires the chosen audio as its own track, separate from the display capture, and how to
+// clean it up again. 'system' is handled by main's display-media handler instead; this covers
+// the other two: 'app' (one specific app's sound via native/mac-app-audio, macOS only, needs a
+// window source) and a specific input device (a mic, or a virtual device like BlackHole, for
+// routing just one app's sound on any platform). Returns null for 'system' or 'none'.
+async function captureShareAudio(audioDeviceId, windowId) {
+  if (!audioDeviceId || audioDeviceId === 'system') return null
+  if (audioDeviceId === 'app') {
+    if (windowId == null) {
+      toast('App audio needs sharing a specific window, not a whole screen — sharing without it this time.', true)
+      return null
+    }
+    let id
+    try {
+      ;({id} = await window.api.startAppAudio(windowId))
+    } catch (error) {
+      toast(`Could not capture that app's audio: ${errorMessage(error)}`, true)
+      return null
+    }
+    const generated = createAppAudioTrack(() => window.api.pullAppAudio(id))
+    if (!generated) {
+      window.api.stopAppAudio(id)
+      return null
+    }
+    return {track: generated.track, cleanup: () => { generated.stop(); window.api.stopAppAudio(id) }}
+  }
   try {
-    const micStream = await navigator.mediaDevices.getUserMedia({audio: {deviceId: {exact: deviceId}}})
-    return micStream.getAudioTracks()[0] || null
+    const micStream = await navigator.mediaDevices.getUserMedia({audio: {deviceId: {exact: audioDeviceId}}})
+    const track = micStream.getAudioTracks()[0]
+    return track ? {track, cleanup: () => {}} : null
   } catch (error) {
     toast(`Could not use the selected audio source: ${errorMessage(error)}`, true)
     return null
@@ -924,19 +946,21 @@ async function startShare(source) {
     if (!selected) throw new Error('That source is no longer available. Try again.')
     const video = shareVideoConstraints(shareSettings.resolution, shareSettings.frameRate)
     const stream = await navigator.mediaDevices.getDisplayMedia({video, audio: systemAudio})
-    const deviceTrack = await captureShareAudioDevice(shareSettings.audioDeviceId)
+    const audio = await captureShareAudio(shareSettings.audioDeviceId, windowIdFromSource(source.id))
     if (session !== current || current.closed || current.claimedAt !== claimedAt || !isHost()) {
       stream.getTracks().forEach((track) => track.stop())
-      deviceTrack?.stop()
+      audio?.cleanup()
+      audio?.track.stop()
       return
     }
-    if (deviceTrack) {
-      stream.addTrack(deviceTrack)
-      // A device can disconnect mid-share (unplugged, its app closed): drop it, keep the video.
-      deviceTrack.addEventListener('ended', () => {
-        if (session !== current || session.stream !== stream || !stream.getTracks().includes(deviceTrack)) return
-        session.room.removeTrack(deviceTrack)
-        stream.removeTrack(deviceTrack)
+    if (audio) {
+      stream.addTrack(audio.track)
+      // The source can end on its own too (device unplugged, app quit): drop it, keep the video.
+      audio.track.addEventListener('ended', () => {
+        audio.cleanup()
+        if (session !== current || session.stream !== stream || !stream.getTracks().includes(audio.track)) return
+        session.room.removeTrack(audio.track)
+        stream.removeTrack(audio.track)
         session.screen = session.screen && {...session.screen, audio: stream.getAudioTracks().length > 0}
         broadcastState()
       }, {once: true})
@@ -3433,6 +3457,9 @@ async function populateAudioDevices({probe = false} = {}) {
   const options = [
     {value: '', label: 'None'},
     {value: 'system', label: 'System audio'},
+    // Native per-app capture (ScreenCaptureKit); only built for macOS, and only usable when the
+    // thing being shared is a specific window, not a whole screen (enforced in captureShareAudio).
+    ...(window.api.platform === 'darwin' ? [{value: 'app', label: "This app's audio (when sharing a window)"}] : []),
     ...audioInputs(devices).map((d) => ({value: d.deviceId, label: d.label})),
   ]
   fillSelect(ui.shareAudioDevice, options, shareSettings.audioDeviceId)

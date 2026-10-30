@@ -1,6 +1,7 @@
 const {Arch} = require('builder-util')
 const checkTurn = require('./check-turn-config')
 const {build} = require('./build-mac-updater')
+const {build: buildAppAudio} = require('./build-mac-app-audio')
 module.exports = async (context) => {
   checkTurn(context)
   if (context.electronPlatformName !== 'darwin') return
@@ -10,4 +11,5 @@ module.exports = async (context) => {
   const arch = Arch[context.arch]
   context.packager.config.mac.extendInfo.SUFeedURL = `https://github.com/onlineslav/watch-with-friends/releases/latest/download/appcast-${arch}.xml`
   await build(arch)
+  buildAppAudio(arch)
 }

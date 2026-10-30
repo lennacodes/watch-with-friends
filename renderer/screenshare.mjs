@@ -60,6 +60,16 @@ export function shareVideoConstraints(resolution, frameRate) {
   }
 }
 
+const WINDOW_SOURCE_ID = /^window:(\d+):\d+$/
+
+// The numeric CGWindowID portion of a desktopCapturer window source id (`window:<id>:<n>`), or
+// null for a screen source or anything else. App-audio capture needs a specific window's owning
+// application; a whole-screen share has no single app to scope it to.
+export function windowIdFromSource(id) {
+  const match = typeof id === 'string' ? WINDOW_SOURCE_ID.exec(id) : null
+  return match ? Number(match[1]) : null
+}
+
 // Shapes enumerateDevices() output for the audio-source picker: only real audio inputs (a
 // microphone, or a virtual device like BlackHole that mirrors system/app audio on macOS).
 export function audioInputs(devices) {
