@@ -53,6 +53,24 @@ test('audio-only telemetry uses audio packets even after a video stream was repl
   assert.equal(stats.outbound, null)
 })
 
+test('readStats captures audio RTP byte counters alongside video, not only in audioOnly mode', () => {
+  // A screen share (or any video with audio) sends/receives both at once; audioOnly only ever
+  // selects one or the other for `inbound`/`outbound`, so actual audio throughput needs its own,
+  // always-populated fields regardless of that mode.
+  const withAudio = [
+    ...report.map((s) => (s.id === 'in' ? {...s, timestamp: 1000, bytesReceived: 250000} : s.id === 'out' ? {...s, ssrc: 3, timestamp: 1000, bytesSent: 500000} : s)),
+    {id: 'audio-in', type: 'inbound-rtp', kind: 'audio', ssrc: 4, timestamp: 1000, bytesReceived: 32000},
+    {id: 'audio-out', type: 'outbound-rtp', kind: 'audio', ssrc: 5, timestamp: 1000, bytesSent: 64000},
+  ]
+  const stats = readStats(withAudio)
+  assert.deepEqual(stats.audioInboundRtp, {id: 'audio-in', ssrc: 4, timestamp: 1000, bytes: 32000})
+  assert.deepEqual(stats.audioOutboundRtp, {id: 'audio-out', ssrc: 5, timestamp: 1000, bytes: 64000})
+  // Unaffected: the existing video-mode fields still read the video streams, not audio.
+  assert.deepEqual(stats.inboundRtp, {id: 'in', ssrc: 2, timestamp: 1000, bytes: 250000})
+  assert.deepEqual(stats.outboundRtp, {id: 'out', ssrc: 3, timestamp: 1000, bytes: 500000})
+  assert.equal(readStats(report).audioInboundRtp, null, 'no audio stream present')
+})
+
 test('readStats retains separate local byte samples without adding counters to room telemetry', () => {
   const stats = readStats(report.map(s => s.id === 'in' ? {...s, timestamp: 1000, bytesReceived: 250000} : s.id === 'out' ? {...s, ssrc: 3, timestamp: 1000, bytesSent: 500000} : s))
   assert.deepEqual(stats.inboundRtp, {id: 'in', ssrc: 2, timestamp: 1000, bytes: 250000})
