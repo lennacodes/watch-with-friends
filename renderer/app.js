@@ -336,6 +336,7 @@ const blankSession = () => ({
   playlist: createPlaylist(),
   playing: null, // host: the playlist item being hosted {id, at}, so the next one can follow it
   screen: null, // host: the share being shown {id, name, audio}
+  screenAudioCleanup: null, // host: stops the share's non-system audio source (device/app-audio)
 })
 let session = blankSession()
 let roomHistory = null
@@ -885,6 +886,12 @@ function clearHostImage() {
 function clearShare() {
   session.screen = null
   ui.sharePreview.srcObject = null
+  // Explicit, not just the track's 'ended' event: MediaStreamTrackGenerator (the app-audio path)
+  // doesn't reliably fire 'ended' when stopped, so relying on that alone leaked the native
+  // capture process — it kept running, never told to stop, every time a share ended cleanly
+  // instead of crashing (only a crash happened to end the pull loop and trigger cleanup).
+  session.screenAudioCleanup?.()
+  session.screenAudioCleanup = null
 }
 
 // Acquires the chosen audio as its own track, separate from the display capture, and how to
@@ -978,6 +985,7 @@ async function startShare(source) {
       }, {once: true})
     }
     session.screen = {id: String(claimedAt), name: source.name, source, audio: stream.getAudioTracks().length > 0}
+    session.screenAudioCleanup = audio?.cleanup ?? null
     logEvent('screenshare', 'started', {audioDeviceId: shareSettings.audioDeviceId, audio: session.screen.audio, resolution: shareSettings.resolution, frameRate: shareSettings.frameRate})
     // The track also ends on its own when the OS source closes or the browser's own share bar is used.
     stream.getVideoTracks()[0].addEventListener('ended', () => {
@@ -1428,6 +1436,7 @@ function failHosting(error) {
   player.close()
   unpublishStream()
   clearHostImage()
+  clearShare()
   toast(errorMessage(error), true)
   broadcastState()
 }
