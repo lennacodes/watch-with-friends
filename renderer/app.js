@@ -33,7 +33,7 @@ import {drawConfetti, launchConfetti, stepConfetti} from './confetti.mjs'
 import {REACTIONS, createRateLimiter, playReactionSound} from './reactions.mjs'
 import {clampZoom, stepZoom, parseZoom, formatZoom, zoomPercent, MIN_ZOOM, MAX_ZOOM, DEFAULT_ZOOM} from './zoom.mjs'
 import {captionHtml} from './subtitles.mjs'
-import {shareSources, hidesTimeline, RESOLUTIONS, FRAME_RATES, DEFAULT_RESOLUTION, DEFAULT_FRAME_RATE, shareVideoConstraints, audioInputs, windowIdFromSource} from './screenshare.mjs'
+import {shareSources, hidesTimeline, RESOLUTIONS, FRAME_RATES, DEFAULT_RESOLUTION, DEFAULT_FRAME_RATE, shareVideoConstraints, audioInputs, windowIdFromSource, AUDIO_BITRATES, DEFAULT_AUDIO_BITRATE, shareAudioBitrate} from './screenshare.mjs'
 import {createAppAudioTrack} from './app-audio.mjs'
 import {
   DRAWER,
@@ -238,6 +238,7 @@ const ui = {
   shareResolution: $('share-resolution'),
   shareFramerate: $('share-framerate'),
   shareAudioDevice: $('share-audio-device'),
+  shareAudioBitrate: $('share-audio-bitrate'),
   leave: $('leave'),
   stage: $('stage'),
   localVideo: $('local-video'),
@@ -1148,7 +1149,10 @@ async function tuneSenders() {
         const params = sender.getParameters()
         if (!track || !params.encodings?.length || !current.stream?.getTracks().includes(track)) continue
         const encoding = params.encodings[0]
-        const maxBitrate = track.kind === 'video' ? quality?.bitrate || 4_000_000 : AUDIO_MAX_BITRATE
+        // A screen share's audio uses the configurable Settings bitrate (up to Opus's own
+        // practical ceiling); file/image hosting keeps the fixed default, unaffected.
+        const audioBitrate = current.screen ? shareAudioBitrate(shareSettings.audioBitrate) : AUDIO_MAX_BITRATE
+        const maxBitrate = track.kind === 'video' ? quality?.bitrate || 4_000_000 : audioBitrate
         const settings = track.getSettings()
         const scale = quality?.scale || Math.max(1, (settings.width || 0) / MAX_STREAM_WIDTH, (settings.height || 0) / 1080)
         if (encoding.maxBitrate === maxBitrate && (track.kind !== 'video' || encoding.scaleResolutionDownBy === scale)) continue
@@ -3452,7 +3456,7 @@ applyZoom(zoom)
 
 // ---------- Screen sharing settings ----------
 // Persisted like uiScale; shareVideoConstraints tolerates a stale or invalid saved value.
-const DEFAULT_SHARE_SETTINGS = {resolution: DEFAULT_RESOLUTION, frameRate: DEFAULT_FRAME_RATE, audioDeviceId: 'system'}
+const DEFAULT_SHARE_SETTINGS = {resolution: DEFAULT_RESOLUTION, frameRate: DEFAULT_FRAME_RATE, audioDeviceId: 'system', audioBitrate: DEFAULT_AUDIO_BITRATE}
 let shareSettings = {...DEFAULT_SHARE_SETTINGS}
 try {
   const saved = JSON.parse(localStorage.getItem('shareSettings') || 'null')
@@ -3467,6 +3471,7 @@ function saveShareSettings() {
 
 fillSelect(ui.shareResolution, RESOLUTIONS, shareSettings.resolution)
 fillSelect(ui.shareFramerate, FRAME_RATES.map((fps) => ({value: String(fps), label: `${fps} fps`})), String(shareSettings.frameRate))
+fillSelect(ui.shareAudioBitrate, AUDIO_BITRATES.map((bitrate) => ({value: String(bitrate), label: `${bitrate / 1000} kbps${bitrate === AUDIO_BITRATES.at(-1) ? ' (maximum)' : ''}`})), String(shareAudioBitrate(shareSettings.audioBitrate)))
 
 // Device ids and labels are hidden until the mic permission prompt has been answered once, so the
 // list would otherwise be unusably empty on first use. Only ask for it (`probe: true`) when the
@@ -3505,6 +3510,11 @@ ui.shareFramerate.addEventListener('change', () => {
   shareSettings.frameRate = Number(ui.shareFramerate.value)
   saveShareSettings()
   applyShareVideoConstraints()
+})
+ui.shareAudioBitrate.addEventListener('change', () => {
+  shareSettings.audioBitrate = Number(ui.shareAudioBitrate.value)
+  saveShareSettings()
+  tuneSenders() // picks it up immediately; it would anyway within a second via the state interval
 })
 ui.shareAudioDevice.addEventListener('change', () => {
   shareSettings.audioDeviceId = ui.shareAudioDevice.value

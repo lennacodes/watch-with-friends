@@ -47,6 +47,15 @@ export const RESOLUTIONS = [
 export const FRAME_RATES = [15, 24, 30, 60, 120]
 export const DEFAULT_RESOLUTION = 'native'
 export const DEFAULT_FRAME_RATE = 30
+// 510kbps is Opus's own practical ceiling (also the maxaveragebitrate the receiver's SDP already
+// asks for in lib.mjs's preferStereoOpus) — "Maximum" here reaches that ceiling rather than
+// inventing a higher one Opus can't use.
+export const AUDIO_BITRATES = [128_000, 256_000, 510_000]
+export const DEFAULT_AUDIO_BITRATE = 256_000
+
+// Validates a bitrate against the offered choices; falls back for anything else (a stale or
+// hand-edited localStorage value), the same way shareVideoConstraints does for resolution/fps.
+export const shareAudioBitrate = (bitrate) => (AUDIO_BITRATES.includes(bitrate) ? bitrate : DEFAULT_AUDIO_BITRATE)
 
 // Shapes a resolution/frame rate preference into getDisplayMedia's video constraints, or
 // MediaStreamTrack.applyConstraints() for a live change. Falls back silently on nonsense input

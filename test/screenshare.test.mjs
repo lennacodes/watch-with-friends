@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import {MAX_SOURCES, MAX_SOURCE_NAME, cleanShare, hidesTimeline, shareSources, RESOLUTIONS, FRAME_RATES, DEFAULT_RESOLUTION, DEFAULT_FRAME_RATE, shareVideoConstraints, audioInputs, windowIdFromSource} from '../renderer/screenshare.mjs'
+import {MAX_SOURCES, MAX_SOURCE_NAME, cleanShare, hidesTimeline, shareSources, RESOLUTIONS, FRAME_RATES, DEFAULT_RESOLUTION, DEFAULT_FRAME_RATE, shareVideoConstraints, audioInputs, windowIdFromSource, AUDIO_BITRATES, DEFAULT_AUDIO_BITRATE, shareAudioBitrate} from '../renderer/screenshare.mjs'
 
 test('shareSources shapes raw desktopCapturer output for the picker and drops junk entries', () => {
   const raw = [
@@ -82,6 +82,14 @@ test('audioInputs keeps only audio input devices with a real id, and tolerates a
     {deviceId: 'mic1', label: 'Built-in Microphone'},
     {deviceId: 'blackhole', label: 'Microphone'},
   ])
+})
+
+test('shareAudioBitrate accepts a known bitrate and falls back to the default for anything else', () => {
+  for (const bitrate of AUDIO_BITRATES) assert.equal(shareAudioBitrate(bitrate), bitrate)
+  assert.equal(shareAudioBitrate(999), DEFAULT_AUDIO_BITRATE)
+  assert.equal(shareAudioBitrate(undefined), DEFAULT_AUDIO_BITRATE)
+  assert.equal(shareAudioBitrate('256000'), DEFAULT_AUDIO_BITRATE, 'a string does not match the numeric bitrates')
+  assert.ok(AUDIO_BITRATES.includes(DEFAULT_AUDIO_BITRATE))
 })
 
 test('windowIdFromSource extracts the numeric CGWindowID from a window source, and rejects everything else', () => {
