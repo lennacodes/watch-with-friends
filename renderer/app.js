@@ -995,6 +995,12 @@ async function startShare(source) {
     ui.sharePreview.srcObject = stream
     ui.sharePreview.play().catch(() => {})
     broadcastState()
+    const outgoingAudioTrack = stream.getAudioTracks()[0]
+    if (outgoingAudioTrack) {
+      sampleTrackAudioLevel(outgoingAudioTrack).then((rms) => {
+        if (session === current && !current.closed) logEvent('screenshare', 'audio-level', {audioDeviceId: shareSettings.audioDeviceId, rms})
+      })
+    }
   } catch (error) {
     if (session !== current || current.closed || current.claimedAt !== claimedAt || !isHost()) return
     failHosting(error)
@@ -3755,6 +3761,47 @@ function audioOutput() {
   return output
 }
 
+// Diagnostic only, never wired into playback: taps an AnalyserNode onto an existing AudioNode
+// just long enough to measure whether it's actually carrying sound, then disconnects. Answers
+// "does this track carry real signal" independently of whether capture/WebRTC/etc. report
+// success — none of those layers can tell you the audio itself isn't silence.
+function sampleAudioLevelFromNode(node, ctx, durationMs = 600) {
+  return new Promise((resolve) => {
+    try {
+      const analyser = ctx.createAnalyser()
+      analyser.fftSize = 2048
+      node.connect(analyser)
+      setTimeout(() => {
+        const data = new Float32Array(analyser.fftSize)
+        analyser.getFloatTimeDomainData(data)
+        node.disconnect(analyser)
+        let sumSquares = 0
+        for (const sample of data) sumSquares += sample * sample
+        resolve(Math.sqrt(sumSquares / data.length))
+      }, durationMs)
+    } catch {
+      resolve(null)
+    }
+  })
+}
+
+// Same idea, for a raw track with no existing AudioContext of its own (the host's own outgoing
+// share track, before anything else is listening to it).
+function sampleTrackAudioLevel(track) {
+  return new Promise((resolve) => {
+    try {
+      const ctx = new AudioContext()
+      const source = ctx.createMediaStreamSource(new MediaStream([track]))
+      sampleAudioLevelFromNode(source, ctx, 600).then((rms) => {
+        ctx.close().catch(() => {})
+        resolve(rms)
+      })
+    } catch {
+      resolve(null)
+    }
+  })
+}
+
 function routeRemoteAudio(stream) {
   const tracks = stream.getAudioTracks().filter((track) => track.readyState === 'live')
   const track = tracks.find((track) => !track.muted) || tracks[0]
@@ -3767,6 +3814,11 @@ function routeRemoteAudio(stream) {
   // removed. Give it exactly the live track we want instead of relying on ID order.
   remoteAudio = audio.createMediaStreamSource(new MediaStream([track]))
   remoteAudio.connect(out)
+  // A one-off level check specifically while watching a screen share, not for ordinary file
+  // playback: the open question here has been "does real audio ever reach the viewer at all".
+  if (session.remote?.screen) {
+    sampleAudioLevelFromNode(remoteAudio, audio).then((rms) => logEvent('screenshare', 'received-audio-level', {rms}))
+  }
 }
 
 function setVolume(volume) {
