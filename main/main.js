@@ -1,7 +1,7 @@
 const path = require('node:path')
 const fs = require('node:fs')
 const os = require('node:os')
-const {app, BrowserWindow, dialog, ipcMain, shell} = require('electron')
+const {app, BrowserWindow, dialog, ipcMain, session, shell, desktopCapturer} = require('electron')
 const log = require('./log')
 const media = require('./media')
 const {loadIceServers} = require('./turn')
@@ -21,6 +21,10 @@ const MEDIA_EXTENSIONS = [
 ]
 const SUBTITLE_EXTENSIONS = ['srt', 'ass', 'ssa', 'vtt']
 const downloadStores = new Map()
+// Set by screenshare:select right before the renderer calls getDisplayMedia, and read once by
+// the display-media handler below. Only a source this list itself just returned is ever granted.
+let shareSourcesById = new Map()
+let pendingShareSourceId = null
 function downloadStore(contents) {
   if (!downloadStores.has(contents.id)) {
     const contentsId = contents.id
@@ -94,6 +98,17 @@ async function pickFiles(event, name, extensions, multiple = false) {
 const pickFile = (event, name, extensions) => pickFiles(event, name, extensions).then((paths) => paths[0] || null)
 
 function registerIpc() {
+  // Our own picker runs in the renderer; this only ever grants a source screenshare:sources
+  // just listed and screenshare:select just accepted, never an arbitrary id from the page.
+  // System audio ('loopback') is Windows only (see Streams.audio in Electron's docs); elsewhere
+  // the share is video only, which the renderer detects from the resulting stream's track count.
+  session.defaultSession.setDisplayMediaRequestHandler((request, callback) => {
+    const id = pendingShareSourceId
+    pendingShareSourceId = null
+    const source = id && shareSourcesById.get(id)
+    if (!source) return callback({})
+    callback({video: source, ...(process.platform === 'win32' && {audio: 'loopback'})})
+  }, {useSystemPicker: false})
   ipcMain.handle('app:version', () => app.getVersion())
   ipcMain.handle('app:open-project', () => shell.openExternal('https://github.com/onlineslav/watch-with-friends'))
   ipcMain.handle('youtube:titles', (_event, ids) => youTubeTitles(ids))
@@ -125,6 +140,15 @@ function registerIpc() {
     }))
   })
   ipcMain.handle('media:image', (_event, filePath) => media.readImage(filePath))
+  ipcMain.handle('screenshare:sources', async () => {
+    const sources = await desktopCapturer.getSources({types: ['screen', 'window'], thumbnailSize: {width: 150, height: 150}})
+    shareSourcesById = new Map(sources.map((source) => [source.id, source]))
+    return sources.map((source) => ({id: source.id, name: source.name, thumbnail: source.thumbnail.isEmpty() ? null : source.thumbnail.toDataURL()}))
+  })
+  ipcMain.handle('screenshare:select', (_event, id) => {
+    pendingShareSourceId = typeof id === 'string' && shareSourcesById.has(id) ? id : null
+    return Boolean(pendingShareSourceId)
+  })
   ipcMain.handle('session:start', async (_event, options) => {
     try {
       const started = await media.startSession(options)

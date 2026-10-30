@@ -1,6 +1,7 @@
 // Small, explicit boundaries for data that comes from another computer.
 import {cleanText} from './profile.mjs'
 import {isYouTubeId} from '../shared/youtube.mjs'
+import {cleanShare} from './screenshare.mjs'
 
 export const PROTOCOL = 2
 export const MAX_PEERS = 7 // eight people including this app
@@ -59,6 +60,9 @@ export function cleanState(value, peerId) {
   if (value.audioSelected && !audio.some((t) => t.value === value.audioSelected)) return null
   if (value.subtitleSelected && !subtitles.some((t) => t.value === value.subtitleSelected)) return null
   if (value.image !== null && (!isRecord(value.image) || value.image.id !== String(value.claimedAt))) return null
+  const screen = value.screen == null ? null : cleanShare(value.screen, value.claimedAt)
+  if (value.screen != null && !screen) return null
+  if (screen && value.image) return null
   if (value.playlistId !== null && !isId(value.playlistId)) return null
   if (value.playlistPosition !== undefined && !Number.isFinite(value.playlistPosition)) return null
   if (value.finished !== undefined && typeof value.finished !== 'boolean') return null
@@ -78,7 +82,7 @@ export function cleanState(value, peerId) {
     epoch: value.epoch, sentAt: value.sentAt, time: value.time, duration: value.duration,
     title: cleanText(value.title, 200), loading: value.loading, playing: value.playing,
     buffering: value.buffering, loop: value.loop, audioOnly: value.audioOnly,
-    transcoding: value.transcoding, ended: value.ended, image: value.image && {id: value.image.id},
+    transcoding: value.transcoding, ended: value.ended, image: value.image && {id: value.image.id}, screen,
     error: typeof value.error === 'string' ? cleanText(value.error, 200) : null,
     playlistId: value.playlistId, playlistPosition: value.playlistPosition ?? 0, finished: value.finished === true,
     ...(value.youtubeId && {youtubeId: value.youtubeId}),

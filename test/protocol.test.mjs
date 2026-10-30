@@ -28,6 +28,16 @@ test('opaque subtitle catalogs never publish paths and only resolve selected loc
   assert.equal(new SubtitleCatalog().local.get(local), undefined)
 })
 
+test('screen-share state validates like a picture and an unknown field is simply dropped', () => {
+  assert.deepEqual(cleanState(state({screen: {id: '1', name: 'Entire Screen', audio: true}}), 'host').screen, {id: '1', name: 'Entire Screen', audio: true})
+  assert.equal(cleanState(state({screen: {id: '1', name: 'Entire Screen', audio: true}}), 'host').image, null)
+  for (const screen of [{id: 'old'}, {id: 1}, {id: '1', name: 'x'.repeat(300)}]) {
+    assert.equal(cleanState(state({screen}), 'host'), null, JSON.stringify(screen))
+  }
+  assert.equal(cleanState(state({screen: {id: '1'}, image: {id: '1'}}), 'host'), null, 'cannot claim both at once')
+  assert.equal(cleanState(state({unknownFutureField: 'anything'}), 'host').unknownFutureField, undefined)
+})
+
 test('YouTube state accepts identifiers only and cannot also claim an image', () => {
   assert.equal(cleanState(state({youtubeId: 'M7lc1UVf-VE'}), 'host').youtubeId, 'M7lc1UVf-VE')
   for (const youtubeId of ['', 'https://youtube.com/watch?v=M7lc1UVf-VE', '../file', {}]) {
