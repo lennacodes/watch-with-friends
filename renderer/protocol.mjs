@@ -19,6 +19,10 @@ export const nextRevision = (...values) => {
 export const sameClaim = (a, b) => Boolean(a && b && a.hostId === b.hostId && a.claimedAt === b.claimedAt)
 export const newerClaim = (a, b) => !b || (a.claimedAt !== b.claimedAt ? a.claimedAt > b.claimedAt : a.hostId > b.hostId)
 export const acceptsState = (state, current) => !current || newerClaim(state, current) || (sameClaim(state, current) && state.sequence > current.sequence)
+// True only when a host reports nothing hosted at all (e.g. right after stopping a share): no
+// file, image, YouTube video or playlist item, and so still "loading". A file genuinely still
+// opening already has a playlistId by the time it claims host, so this can't mistake one for the other.
+export const stateIsIdle = (state) => state.loading && !state.ended && !state.image && !state.screen && !state.youtubeId && !state.playlistId
 
 export function cleanTelemetry(value) {
   if (!isRecord(value)) return null

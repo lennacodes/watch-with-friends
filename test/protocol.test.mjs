@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import {PROTOCOL, cleanState, cleanTelemetry, cleanCues, SubtitleCatalog, acceptsState, nextRevision, sessionHandler, validCommand} from '../renderer/protocol.mjs'
+import {PROTOCOL, cleanState, cleanTelemetry, cleanCues, SubtitleCatalog, acceptsState, nextRevision, sessionHandler, validCommand, stateIsIdle} from '../renderer/protocol.mjs'
 import {createPlaylist, addItem, removeItem, mergePlaylist, MAX_REMOVED} from '../renderer/playlist.mjs'
 import {createBoard, addStrokeChunk, clearBoard, mergeSnapshot, boardSnapshot, orderedStrokes, MAX_STROKES} from '../renderer/whiteboard.mjs'
 
@@ -37,6 +37,21 @@ test('screen-share state validates like a picture and an unknown field is simply
   assert.equal(cleanState(state({screen: {id: '1'}, image: {id: '1'}}), 'host'), null, 'cannot claim both at once')
   assert.equal(cleanState(state({screen: {id: '1'}, youtubeId: 'M7lc1UVf-VE'}), 'host'), null, 'cannot claim youtube and a share at once')
   assert.equal(cleanState(state({unknownFutureField: 'anything'}), 'host').unknownFutureField, undefined)
+})
+
+test('stateIsIdle is true only when nothing at all is hosted, not while a file is still opening', () => {
+  const nothingHosted = cleanState(state({loading: true}), 'host')
+  assert.equal(stateIsIdle(nothingHosted), true)
+  const openingFile = cleanState(state({loading: true, playlistId: 'item'}), 'host')
+  assert.equal(stateIsIdle(openingFile), false)
+  const sharing = cleanState(state({screen: {id: '1'}}), 'host')
+  assert.equal(stateIsIdle(sharing), false)
+  const showingImage = cleanState(state({image: {id: '1'}}), 'host')
+  assert.equal(stateIsIdle(showingImage), false)
+  const watchingYoutube = cleanState(state({youtubeId: 'M7lc1UVf-VE'}), 'host')
+  assert.equal(stateIsIdle(watchingYoutube), false)
+  const failed = cleanState(state({loading: true, ended: true}), 'host')
+  assert.equal(stateIsIdle(failed), false)
 })
 
 test('YouTube state accepts identifiers only and cannot also claim an image', () => {

@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 import {readFileSync} from 'node:fs'
 import vm from 'node:vm'
 import {createPlaylist, addItem, removeItem, mergePlaylist, orderedItems, nextItem} from '../renderer/playlist.mjs'
+import {stateIsIdle} from '../renderer/protocol.mjs'
 
 // Exercise the renderer's message handlers with media/network boundaries stubbed.
 const source = readFileSync(new URL('../renderer/app.js', import.meta.url), 'utf8')
@@ -44,7 +45,7 @@ function setup(role = 'host') {
     detachRemoteStream: () => calls.detached++, unpublishStream: () => calls.unpublished++, clearHostImage: () => {}, clearShare: () => {},
     setRole: (role) => { session.role = role }, render: () => {}, saveRoom: () => {}, shareAvailability: () => {},
     broadcastState: () => {}, checkpointPlayback: () => {}, toast: () => {}, cleanState: (state) => state,
-    acceptsState: () => true, sameClaim: () => true, nextSteady: () => ({}), viewerTime: () => 0,
+    acceptsState: () => true, sameClaim: () => true, nextSteady: () => ({}), viewerTime: () => 0, stateIsIdle,
     performance, ui: {stage: {dataset: {}}}, attachRemoteStream: () => assert.fail('Removed media must not attach'),
   })
   for (const name of ['stopHosting', 'stopRemovedPlayback', 'removeFromPlaylist', 'receivePlaylist', 'receiveState']) {

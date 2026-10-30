@@ -1,5 +1,5 @@
 import {joinRoom, selfId} from 'trystero'
-import {PROTOCOL, MAX_PEERS, HOST_TIMEOUT_MS, isRevision, nextRevision, sameClaim, newerClaim, acceptsState, cleanState, cleanTelemetry, cleanCues, validCommand, SubtitleCatalog, messageLimiter, sessionHandler} from './protocol.mjs'
+import {PROTOCOL, MAX_PEERS, HOST_TIMEOUT_MS, isRevision, nextRevision, sameClaim, newerClaim, acceptsState, cleanState, cleanTelemetry, cleanCues, validCommand, SubtitleCatalog, messageLimiter, sessionHandler, stateIsIdle} from './protocol.mjs'
 import {createNetwork} from './network.mjs'
 import {RoomDownloads} from './downloads.mjs'
 import {authenticateRoomPeer} from './room-auth.mjs'
@@ -1393,6 +1393,17 @@ function receiveState(value, peerId) {
   checkpointPlayback(state)
   saveRoom()
   for (const [id, receiver] of Object.entries(state.viewers)) if (session.peers.has(id)) person(id).receiver = receiver
+  // The host voluntarily has nothing to show (e.g. just stopped a share) without having left the
+  // room, so there is no peer-departure event to recover on: do that recovery here instead, the
+  // same way onPeerLeave does for a host that's actually gone.
+  if (stateIsIdle(state)) {
+    youtube.close()
+    session.hostId = null
+    session.remote = null
+    detachRemoteStream()
+    setRole('idle')
+    return
+  }
   session.role = 'viewer'
   ui.stage.dataset.role = 'viewer'
   if (stopRemovedPlayback()) return
