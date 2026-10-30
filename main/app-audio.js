@@ -27,7 +27,7 @@ function startSession(windowId) {
   if (process.platform !== 'darwin') return Promise.reject(new Error('App audio capture is only available on macOS'))
   return new Promise((resolve, reject) => {
     const proc = spawn(binaryPath(), [String(windowId)], {stdio: ['ignore', 'pipe', 'pipe']})
-    const session = {proc, chunks: [], size: 0, done: false, killed: false, error: null, waiter: null}
+    const session = {proc, chunks: [], size: 0, done: false, killed: false, error: null, waiter: null, bytesReceived: 0}
     const wake = () => {
       const waiter = session.waiter
       session.waiter = null
@@ -64,6 +64,7 @@ function startSession(windowId) {
         session.receivedAnyData = true
         clearTimeout(session.silenceTimer)
       }
+      session.bytesReceived += buf.length
       session.chunks.push(buf)
       session.size += buf.length
       if (session.size > HIGH_WATER_BYTES) proc.stdout.pause()
@@ -79,10 +80,17 @@ function startSession(windowId) {
         reject(err)
       }
     })
-    proc.on('close', (code) => {
+    proc.on('close', (code, signal) => {
       clearTimeout(session.silenceTimer)
       session.done = true
-      if (code !== 0 && !session.killed && !session.error) session.error = `mac-app-audio exited with code ${code}`
+      session.exitSignal = signal
+      if (code !== 0 && !session.killed && !session.error) {
+        // code is null when a signal killed the process (a crash, not a normal exit): macOS
+        // writes a full stack trace for that to DiagnosticReports, which this can only point at.
+        session.error = signal
+          ? `mac-app-audio was killed by ${signal} (likely a crash) — check ~/Library/Logs/DiagnosticReports/mac-app-audio-*.ips for the stack trace.`
+          : `mac-app-audio exited with code ${code}`
+      }
       wake()
       if (!settled) {
         settled = true
@@ -100,6 +108,10 @@ async function pull(id) {
   }
   if (session.killed) return {done: true}
   if (session.size) {
+    // Flagged once per session so main.js can log the single most diagnostic fact here: whether
+    // real capture ever actually happened, not just "no error yet".
+    const first = !session.loggedFirstChunk
+    session.loggedFirstChunk = true
     const parts = []
     let taken = 0
     while (session.chunks.length && taken < MAX_PULL_BYTES) {
@@ -109,10 +121,10 @@ async function pull(id) {
     }
     session.size -= taken
     if (session.size < HIGH_WATER_BYTES / 2) session.proc.stdout.resume()
-    return {chunk: Buffer.concat(parts, taken)}
+    return {chunk: Buffer.concat(parts, taken), first}
   }
   sessions.delete(id)
-  return {done: true, error: session.error}
+  return {done: true, error: session.error, bytesReceived: session.bytesReceived, exitSignal: session.exitSignal}
 }
 
 function stopSession(id) {

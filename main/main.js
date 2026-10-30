@@ -171,8 +171,9 @@ function registerIpc() {
   })
   ipcMain.handle('appaudio:pull', async (_event, id) => {
     const result = await appAudio.pull(id)
-    if (result?.error) log.record('appaudio', 'failed', {id, message: result.error}, 'error')
-    else if (result?.done) log.record('appaudio', 'done', {id})
+    if (result?.first) log.record('appaudio', 'receiving', {id})
+    if (result?.error) log.record('appaudio', 'failed', {id, message: result.error, bytesReceived: result.bytesReceived, exitSignal: result.exitSignal}, 'error')
+    else if (result?.done) log.record('appaudio', 'done', {id, bytesReceived: result.bytesReceived})
     return result
   })
   ipcMain.handle('appaudio:stop', (_event, id) => {

@@ -13,8 +13,11 @@ const CHUNK_BYTES = FRAMES_PER_CHUNK * BYTES_PER_FRAME
 // `pull` matches window.api.pull's shape: resolves {chunk} while data is coming, or
 // {done: true, error?} once the source ends. Raw bytes arrive in whatever sizes the native
 // process's pipe happens to deliver, so this re-buffers them into whole quanta before handing
-// them to AudioData, which needs an exact frame count.
-export function createAppAudioTrack(pull) {
+// them to AudioData, which needs an exact frame count. `onEnded(error)` fires once, with the
+// native process's error message or null for a clean end — without it, a capture that fails
+// after starting (the silence timeout, or a crash) stops silently from the caller's point of
+// view: the track just stops delivering anything, with no error to show or log.
+export function createAppAudioTrack(pull, {onEnded} = {}) {
   if (typeof MediaStreamTrackGenerator !== 'function' || typeof AudioData !== 'function') return null
   const generator = new MediaStreamTrackGenerator({kind: 'audio'})
   const writer = generator.writable.getWriter()
@@ -52,7 +55,10 @@ export function createAppAudioTrack(pull) {
         if (stopped || generator.readyState === 'ended') return
         const result = await pull()
         if (stopped || generator.readyState === 'ended') return
-        if (!result.chunk) return
+        if (!result.chunk) {
+          if (!stopped) onEnded?.(result.error || null)
+          return
+        }
         append(result.chunk)
         await flush()
       }

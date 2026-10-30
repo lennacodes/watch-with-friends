@@ -907,7 +907,16 @@ async function captureShareAudio(audioDeviceId, windowId) {
       toast(`Could not capture that app's audio: ${errorMessage(error)}`, true)
       return null
     }
-    const generated = createAppAudioTrack(() => window.api.pullAppAudio(id))
+    const generated = createAppAudioTrack(() => window.api.pullAppAudio(id), {
+      // Fires once if capture fails after already starting (the silence timeout, or a crash) —
+      // main.js already logs this, but without a toast too it'd fail silently from here on.
+      onEnded: (error) => {
+        if (error) {
+          logError('screenshare', 'app-audio-ended', {windowId, message: error})
+          toast(`App audio stopped: ${error}`, true)
+        }
+      },
+    })
     if (!generated) {
       window.api.stopAppAudio(id)
       return null

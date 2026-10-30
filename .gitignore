@@ -9,3 +9,4 @@ native/mac-app-audio/mac-app-audio
 # local diagnostics and scratch output
 logs/
 work/
+.DS_Store
