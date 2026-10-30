@@ -41,7 +41,7 @@ function setup(role = 'host') {
     playItem: (...args) => calls.played.push(args),
     youtube: {close: () => {}},
     isHost: () => session.role === 'host', player: {close: () => calls.closed++},
-    detachRemoteStream: () => calls.detached++, unpublishStream: () => calls.unpublished++, clearHostImage: () => {},
+    detachRemoteStream: () => calls.detached++, unpublishStream: () => calls.unpublished++, clearHostImage: () => {}, clearShare: () => {},
     setRole: (role) => { session.role = role }, render: () => {}, saveRoom: () => {}, shareAvailability: () => {},
     broadcastState: () => {}, checkpointPlayback: () => {}, toast: () => {}, cleanState: (state) => state,
     acceptsState: () => true, sameClaim: () => true, nextSteady: () => ({}), viewerTime: () => 0,

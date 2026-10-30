@@ -2070,6 +2070,74 @@ button:disabled {
   display: none;
 }
 
+.stage.sharing-screen video.local {
+  display: none;
+}
+
+.screen-sharing {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  color: rgba(255, 255, 255, 0.75);
+  text-align: center;
+}
+
+.screen-sharing p {
+  max-width: 80%;
+  margin: 0;
+  font-size: 18px;
+}
+
+#share-picker .modal-card {
+  width: min(640px, 100%);
+}
+
+.share-picker-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: 10px;
+  max-height: 50vh;
+  overflow-y: auto;
+}
+
+.share-source {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 6px;
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+  text-align: left;
+}
+
+.share-source:hover,
+.share-source:focus-visible {
+  border-color: var(--accent);
+}
+
+.share-source img {
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  object-fit: contain;
+  background: #000;
+  border-radius: 6px;
+}
+
+.share-source-name {
+  font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .youtube-player {
   position: absolute;
   /* Keep YouTube's own controls clear of the room's top bar and shared controls. */

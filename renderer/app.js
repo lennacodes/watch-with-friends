@@ -33,6 +33,7 @@ import {drawConfetti, launchConfetti, stepConfetti} from './confetti.mjs'
 import {REACTIONS, createRateLimiter, playReactionSound} from './reactions.mjs'
 import {clampZoom, stepZoom, parseZoom, formatZoom, zoomPercent, MIN_ZOOM, MAX_ZOOM, DEFAULT_ZOOM} from './zoom.mjs'
 import {captionHtml} from './subtitles.mjs'
+import {shareSources, hidesTimeline} from './screenshare.mjs'
 import {
   DRAWER,
   MAX_ITEMS,
@@ -223,6 +224,15 @@ const ui = {
   openButtons: document.querySelectorAll('[data-open-media]'),
   audioOnly: $('audio-only'),
   audioOnlyTitle: $('audio-only-title'),
+  shareScreen: $('share-screen'),
+  sharePicker: $('share-picker'),
+  sharePickerBack: $('share-picker-back'),
+  sharePickerStatus: $('share-picker-status'),
+  sharePickerList: $('share-picker-list'),
+  screenSharing: $('screen-sharing'),
+  screenSharingTitle: $('screen-sharing-title'),
+  screenSharingAudio: $('screen-sharing-audio'),
+  stopShare: $('stop-share'),
   leave: $('leave'),
   stage: $('stage'),
   localVideo: $('local-video'),
@@ -320,6 +330,7 @@ const blankSession = () => ({
   downloads: null,
   playlist: createPlaylist(),
   playing: null, // host: the playlist item being hosted {id, at}, so the next one can follow it
+  screen: null, // host: the share being shown {id, name, audio}
 })
 let session = blankSession()
 let roomHistory = null
@@ -785,12 +796,13 @@ function stopHosting() {
   player.close()
   unpublishStream()
   clearHostImage()
+  clearShare()
   session.playing = null
   session.openingMedia = false
   setRole('idle')
 }
 
-const hostedTitle = () => session.image?.name || youtube.title || (youtube.videoId && session.playlist.items.get(session.playing?.id)?.title) || player.media?.title || player.media?.name || null
+const hostedTitle = () => session.image?.name || session.screen?.name || youtube.title || (youtube.videoId && session.playlist.items.get(session.playing?.id)?.title) || player.media?.title || player.media?.name || null
 
 function hostYouTube(item, {preview = false, start, autoplay = true} = {}) {
   if (!session.room || session.closed) return
@@ -859,6 +871,59 @@ function clearHostImage() {
   session.imageTransfers.clear()
   if (session.image) URL.revokeObjectURL(session.image.url)
   session.image = null
+}
+
+// ---------- Screen sharing ----------
+// A share claims host the same way opening a file does, and has nothing to play, seek or loop,
+// like a picture (see cleanShare/hidesTimeline in screenshare.mjs).
+
+function clearShare() {
+  session.screen = null
+}
+
+async function startShare(source) {
+  if (!session.room || session.closed) return
+  const current = session
+  checkpointPlayback()
+  saveRoom()
+  const claimedAt = nextRevision(session.claimedAt, session.authority?.claimedAt, session.playlist.revision)
+  stopHosting()
+  session.restorePending = null
+  session.claimedAt = claimedAt
+  session.authority = {hostId: selfId, claimedAt, sequence: 0}
+  session.sequence = 0
+  session.mediaError = null
+  session.hostId = selfId
+  session.remote = null
+  detachRemoteStream()
+  setRole('host')
+  broadcastState()
+  try {
+    const selected = await window.api.selectScreenShareSource(source.id)
+    if (!selected) throw new Error('That source is no longer available. Try again.')
+    const stream = await navigator.mediaDevices.getDisplayMedia({video: true, audio: true})
+    if (session !== current || current.closed || current.claimedAt !== claimedAt || !isHost()) {
+      stream.getTracks().forEach((track) => track.stop())
+      return
+    }
+    session.screen = {id: String(claimedAt), name: source.name, audio: stream.getAudioTracks().length > 0}
+    // The track also ends on its own when the OS source closes or the browser's own share bar is used.
+    stream.getTracks().forEach((track) => track.addEventListener('ended', () => {
+      if (session === current && !current.closed && current.claimedAt === claimedAt && isHost()) stopShare()
+    }, {once: true}))
+    publishShareStream(stream)
+    broadcastState()
+  } catch (error) {
+    if (session !== current || current.closed || current.claimedAt !== claimedAt || !isHost()) return
+    failHosting(error)
+  }
+}
+
+function stopShare() {
+  if (!session.screen) return
+  clearShare()
+  broadcastState() // sent while still 'host', so viewers learn the share ended
+  stopHosting()
 }
 
 // Kept per sender until they send another, so a picture that arrives before its state still shows.
@@ -945,6 +1010,22 @@ function unpublishStream() {
   session.captured = null
 }
 
+// A screen share's stream already is what it is: unlike the file pipeline, its tracks are never
+// swapped mid-session, so this skips publishStream's addtrack/removetrack bookkeeping.
+function publishShareStream(stream) {
+  unpublishStream()
+  stream.getVideoTracks().forEach((track) => (track.contentHint = 'detail')) // text stays sharp
+  session.stream = stream
+  session.captured = null
+  const removeTrack = (track) => {
+    if (session.stream !== stream || !stream.getTracks().includes(track)) return
+    session.room.removeTrack(track)
+    stream.removeTrack(track)
+  }
+  stream.getTracks().forEach((track) => track.addEventListener('ended', () => removeTrack(track), {once: true}))
+  if (session.peers.size) Promise.all(session.room.addStream(stream, {metadata: {claimedAt: session.claimedAt}})).then(tuneSenders, () => {})
+}
+
 // Raise WebRTC's conservative defaults so a movie looks and sounds like a movie.
 async function tuneSenders() {
   const current = session
@@ -991,15 +1072,18 @@ function hostState() {
     ended: Boolean(session.mediaError),
     error: session.mediaError,
     title: cleanText(hostedTitle(), 200),
-    loading: session.openingMedia || (!media && !youtube.loaded && !session.image && !session.mediaError),
+    loading: session.openingMedia || (!media && !youtube.loaded && !session.image && !session.screen && !session.mediaError),
     ...(youtube.videoId && {youtubeId: youtube.videoId}),
     image: session.image ? {id: session.image.id} : null,
+    screen: session.screen,
     playlistId: session.playing?.id || null,
     playlistPosition: session.playing?.position ?? 0,
     finished: Boolean((youtube.videoId ? youtube.ended : video.ended) && !session.loop),
     audioOnly: Boolean(media && !media.video),
-    playing: hostPlaying(),
-    buffering: hostPlaying() && (youtube.videoId ? youtube.buffering : video.readyState < 3),
+    // A share has nothing to play or buffer, like a picture; it would otherwise inherit whatever
+    // the local video element was last doing, which freeze telemetry would misread as stalls.
+    playing: session.screen ? false : hostPlaying(),
+    buffering: session.screen ? false : hostPlaying() && (youtube.videoId ? youtube.buffering : video.readyState < 3),
     time: currentTime(),
     duration: currentDuration(),
     loop: session.loop,
@@ -1219,11 +1303,12 @@ function broadcastState(target) {
   if (!current.openingMedia && current.playlist.current && newerClaim(current.playlist.current, {hostId: selfId, claimedAt: current.claimedAt})) {
     current.claimedAt = nextRevision(current.claimedAt, current.playlist.revision)
     current.sequence = 0
-    if (current.stream) publishStream()
+    if (current.stream && !current.screen) publishStream()
     if (current.image) {
       current.image.id = String(current.claimedAt)
       sendImage()
     }
+    if (current.screen) current.screen.id = String(current.claimedAt)
   }
   current.sequence = nextRevision(current.sequence)
   checkpointPlayback()
@@ -1383,7 +1468,7 @@ const myProfile = () => ({name: myName, username: identity?.username || null, st
 
 // Friends see whether you're in a room, and what you're hosting.
 function myStatus() {
-  const hosting = session.role === 'host' && !session.preview && (player.loaded || youtube.loaded || Boolean(session.image))
+  const hosting = session.role === 'host' && !session.preview && (player.loaded || youtube.loaded || Boolean(session.image) || Boolean(session.screen))
   return {inRoom: Boolean(session.room), hosting, title: hosting ? hostedTitle() : null}
 }
 
@@ -2581,7 +2666,7 @@ const isPlaying = () => (isHost() ? hostPlaying() : Boolean(session.remote?.play
 
 function control(cmd, value) {
   if (session.preview && cmd === 'play') activatePreview()
-  if (isHost() ? session.image : session.remote?.image) return // a picture has nothing to play
+  if (isHost() ? (session.image || session.screen) : (session.remote?.image || session.remote?.screen)) return // nothing to play
   if (isHost()) return applyCommand(cmd, value)
   const r = session.remote
   if (session.role !== 'viewer' || !r || r.ended || performance.now() - r.receivedAt > HOST_TIMEOUT_MS) return
@@ -2628,7 +2713,7 @@ function render() {
   const r = session.remote
   const stale = role === 'viewer' && r && performance.now() - r.receivedAt > HOST_TIMEOUT_MS
   const mediaError = host ? session.mediaError : r?.error
-  const ready = host ? player.loaded || youtube.loaded || Boolean(session.image) : Boolean(r && !r.loading && !r.ended && !stale)
+  const ready = host ? player.loaded || youtube.loaded || Boolean(session.image) || Boolean(session.screen) : Boolean(r && !r.loading && !r.ended && !stale)
   const duration = currentDuration()
   const time = currentTime()
 
@@ -2662,14 +2747,22 @@ function render() {
 
   const image = shownImage()
   const imageMode = Boolean(host ? session.image : r?.image)
+  const shareMode = hidesTimeline(host ? session.screen : r?.screen)
   ui.pausedTitle.textContent = title || resume?.title || ''
-  ui.pausedTitle.hidden = !ui.pausedTitle.textContent || imageMode || Boolean(youtube.videoId) || !(resume || (ready && !isPlaying()))
+  ui.pausedTitle.hidden = !ui.pausedTitle.textContent || imageMode || shareMode || Boolean(youtube.videoId) || !(resume || (ready && !isPlaying()))
   const receivingImage = role === 'viewer' && imageMode && !image
   if (receivingImage && performance.now() - session.imageRetryAt > 15_000) {
     session.imageRetryAt = performance.now()
     session.imageRequest.send({id: r.image.id}, {target: session.hostId, signal: session.lifetime.signal}).catch(() => {})
   }
   ui.stage.classList.toggle('showing-image', imageMode)
+  ui.stage.classList.toggle('sharing-screen', Boolean(host && session.screen))
+  ui.screenSharing.hidden = !(host && session.screen)
+  if (host && session.screen) {
+    ui.screenSharingTitle.textContent = `Sharing: ${session.screen.name}`
+    ui.screenSharingAudio.hidden = session.screen.audio
+  }
+  ui.shareScreen.hidden = !host && role !== 'idle'
   const youtubeMode = Boolean(host ? youtube.videoId : r?.youtubeId)
   ui.stage.classList.toggle('showing-youtube', youtubeMode)
   ui.youtubePlayer.hidden = !youtubeMode
@@ -2690,8 +2783,8 @@ function render() {
   ui.spinner.hidden = !stalled || Boolean(mediaError) || Boolean(stale)
 
   ui.controls.classList.toggle('disabled', !ready)
-  // A picture has nothing to play, seek or loop (control ignores them), so say so.
-  ui.play.disabled = ui.loop.disabled = ui.seek.disabled = imageMode
+  // A picture or a share has nothing to play, seek or loop (control ignores them), so say so.
+  ui.play.disabled = ui.loop.disabled = ui.seek.disabled = imageMode || shareMode
   ui.play.dataset.state = isPlaying() ? 'playing' : 'paused'
   ui.loop.classList.toggle('active', session.loop)
   ui.loop.setAttribute('aria-pressed', String(session.loop))
@@ -3247,6 +3340,55 @@ ui.settings.addEventListener('click', (event) => {
   if (backdropPress && event.target === ui.settings) showSettings(false)
 })
 
+// Our own picker (a grid of thumbnails), not the OS one: main only grants a source this list
+// just returned and the user just clicked, never an arbitrary id (see screenshare:select).
+async function openSharePicker() {
+  const current = session
+  ui.room.append(ui.sharePicker)
+  ui.sharePicker.hidden = false
+  ui.sharePickerStatus.textContent = 'Loading…'
+  ui.sharePickerList.replaceChildren()
+  let sources
+  try {
+    sources = shareSources(await window.api.screenShareSources())
+  } catch (error) {
+    if (session === current) ui.sharePickerStatus.textContent = `Could not list screens or windows: ${errorMessage(error)}`
+    return
+  }
+  if (session !== current || ui.sharePicker.hidden) return // closed, or the room changed, while loading
+  ui.sharePickerStatus.textContent = sources.length ? 'Pick a screen or window to share.' : 'Nothing available to share.'
+  ui.sharePickerList.replaceChildren(...sources.map((source) => {
+    const button = element('button', 'share-source')
+    button.type = 'button'
+    button.title = source.name
+    if (source.thumbnail) {
+      const thumbnail = new Image()
+      thumbnail.src = source.thumbnail
+      thumbnail.alt = ''
+      button.append(thumbnail)
+    }
+    button.append(element('span', 'share-source-name', source.name))
+    button.addEventListener('click', () => {
+      closeSharePicker()
+      startShare(source)
+    })
+    return button
+  }))
+}
+
+function closeSharePicker() {
+  ui.sharePicker.hidden = true
+}
+
+ui.shareScreen.addEventListener('click', () => openSharePicker())
+ui.sharePickerBack.addEventListener('click', () => closeSharePicker())
+let sharePickerBackdropPress = false
+ui.sharePicker.addEventListener('pointerdown', (event) => (sharePickerBackdropPress = event.target === ui.sharePicker))
+ui.sharePicker.addEventListener('click', (event) => {
+  if (sharePickerBackdropPress && event.target === ui.sharePicker) closeSharePicker()
+})
+ui.stopShare.addEventListener('click', () => stopShare())
+
 // One friends list: it slides in from the left on home, and floats over the video on the left in a
 // room. enterRoom and leaveRoom move it between the two.
 function setFriendsOpen(open) {
@@ -3576,7 +3718,7 @@ youtube.addEventListener('ended', () => {
 })
 
 document.addEventListener('keydown', (event) => {
-  if (ui.room.hidden || !ui.settings.hidden || event.target.matches('input:not([type=range]), select, textarea')) return
+  if (ui.room.hidden || !ui.settings.hidden || !ui.sharePicker.hidden || event.target.matches('input:not([type=range]), select, textarea')) return
   if (event.code === 'Space') {
     event.preventDefault()
     if (event.target instanceof HTMLButtonElement) event.target.blur()
@@ -3623,6 +3765,7 @@ document.addEventListener('keydown', (event) => {
   if (event.key !== 'Escape') return
   setReactionsOpen(false)
   endItemDrag(false)
+  closeSharePicker()
   if (!event.target.matches('input')) {
     showSettings(false) // in the name box, Escape only undoes the edit
     setPeopleOpen(false)
@@ -3635,6 +3778,7 @@ const chromeInUse = () =>
   Boolean(
     drawing ||
       !ui.settings.hidden ||
+      !ui.sharePicker.hidden ||
       tabDrag ||
       itemDrag ||
       !ui.reactions.hidden ||
