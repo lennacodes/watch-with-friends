@@ -66,7 +66,7 @@ async function fixtures() {
   const source = fs.readFileSync(path.join(root, 'renderer/app.js'), 'utf8') + `
     window.__test = {
       get session() { return session }, get identity() { return identity },
-      friendNetwork, enterRoom, leaveRoom, hostFile, control, receiveImage, shownImage, selectSubtitle,
+      friendNetwork, enterRoom, leaveRoom, hostFile, startShare, stopShare, shareSettings, tileViews, control, receiveImage, shownImage, selectSubtitle,
       primeDiscovery: (kind) => joinRoom({...network.config(), appId: APP_ID}, kind + ':startup-probe'),
       addToPlaylist, playItem, playNext, playable, orderedItems, moveInPlaylist, removeFromPlaylist, refreshAvailability, setPlaylistOpen,
       get history() { return roomHistory },
@@ -138,16 +138,20 @@ async function fixtures() {
 
 app.whenReady().then(async () => {
   const windows = []
-  const watchdog = setTimeout(() => { console.error('Network integration check timed out'); app.exit(1) }, publicDiscovery || checkYouTube ? 240000 : 120000)
+  const watchdog = setTimeout(() => { console.error('Network integration check timed out'); app.exit(1) }, publicDiscovery || checkYouTube ? 240000 : 180000)
   try {
     const {video, picture, sound} = await fixtures()
     diagnostics.start({dir: path.join(temporary, 'logs'), info: {version: app.getVersion()}})
     require('../main/main').registerIpc()
     ipcMain.removeHandler('net:ice-servers')
     ipcMain.handle('net:ice-servers', () => [])
+    // Shares capture a synthetic canvas and oscillator instead (fakeShare below), never the real screen.
+    ipcMain.removeHandler('screenshare:select')
+    ipcMain.handle('screenshare:select', () => true)
     for (const name of ['alpha', 'bravo', 'charlie']) {
       const win = new BrowserWindow({show: false, webPreferences: {partition: `network-${name}`, backgroundThrottling: false, autoplayPolicy: 'no-user-gesture-required', preload: path.join(temporary, 'preload.js')}})
       windows.push(win)
+      win.webContents.setAudioMuted(true) // checks read levels inside Web Audio; nothing plays out loud
       require('../main/main').watchTransportWarnings(win.webContents)
       if (checkYouTube) registerYouTube(win.webContents.session)
       win.webContents.on('console-message', (details) => {
@@ -740,6 +744,99 @@ app.whenReady().then(async () => {
       dialog.showSaveDialog = originalSaveDialog
       DownloadFiles.prototype.read = originalRead
     }
+    // Simultaneous screen shares, with synthetic captures: a canvas and an oscillator that only
+    // feeds a MediaStream, so the check never touches the real screen or the speakers.
+    await Promise.all(windows.map((win) => run(win, '__test.leaveRoom()')))
+    await run(a, '__test.enterRoom("SHARING1", {joining:false})')
+    await Promise.all([b, c].map((win) => run(win, '__test.enterRoom("SHARING1")')))
+    await connected()
+    for (const [index, win] of windows.entries()) await run(win, `
+      navigator.mediaDevices.getDisplayMedia = async () => {
+        const canvas = Object.assign(document.createElement('canvas'), {width: 320, height: 180});
+        const draw = canvas.getContext('2d');
+        let frame = 0;
+        setInterval(() => { draw.fillStyle = 'hsl(' + (${index * 120} + frame++ % 60) + ', 80%, 50%)'; draw.fillRect(0, 0, 320, 180) }, 33);
+        const stream = canvas.captureStream(30);
+        const context = new AudioContext();
+        const tone = context.createOscillator();
+        const sink = context.createMediaStreamDestination();
+        tone.connect(sink);
+        tone.start();
+        stream.addTrack(sink.stream.getAudioTracks()[0]);
+        return stream;
+      };
+      __test.shareSettings.audioDeviceId = 'system';
+      true`)
+    const [idA, idB, idC] = await Promise.all(windows.map((win) => run(win, '__test.selfId')))
+    const tileKeys = (win) => run(win, '[...document.querySelectorAll("#share-tiles .share-tile")].map(tile => tile.dataset.key)')
+    const visibleTiles = (win) => run(win, '[...document.querySelectorAll("#share-tiles .share-tile")].filter(tile => tile.checkVisibility()).map(tile => tile.dataset.key)')
+    const framesFlowing = (win) => until(win, '[...document.querySelectorAll("#share-tiles video")].every(video => video.readyState >= 2 && video.videoWidth === 320)')
+    await run(a, `__test.hostFile(${JSON.stringify(video)})`)
+    await Promise.all([b, c].map((win) => until(win, 'document.getElementById("remote-video").readyState >= 3')))
+
+    await run(b, '__test.startShare({id: "screen:0:0", name: "Bravo screen"}); true')
+    await until(b, '__test.session.role === "host" && __test.session.screen?.alongside === false')
+    await Promise.all([a, c].map((win) => until(win, `__test.session.role === "viewer" && __test.tileViews.has(${JSON.stringify(idB)})`)))
+    assert.equal(await run(a, '__test.session.playing'), null, "the first share replaced alpha's movie")
+    console.log('PASS: A first share claims host and replaces the movie')
+
+    await run(c, '__test.startShare({id: "window:1:0", name: "Charlie window"}); true')
+    await until(c, '__test.session.screen?.alongside === true')
+    assert.equal(await run(c, '__test.session.role'), 'viewer')
+    assert.equal(await run(b, '__test.session.role === "host" && Boolean(__test.session.screen)'), true, 'a share alongside leaves the host sharing')
+    await until(a, '__test.tileViews.size === 2')
+    await until(b, '__test.tileViews.size === 2')
+    await until(c, '__test.tileViews.size === 2')
+    assert.deepEqual(await tileKeys(a), [idB, idC].sort())
+    assert.deepEqual(await tileKeys(b), ['self', idC])
+    assert.deepEqual(await tileKeys(c), ['self', idB])
+    await Promise.all(windows.map(framesFlowing))
+    for (const win of [b, c]) assert.equal(await run(win, '!__test.tileViews.get("self").mute && !__test.tileViews.get("self").gain'), true, 'your own tile is silent')
+    console.log('PASS: Two people share at once; everyone sees both, sharers see their own preview first')
+
+    await until(a, `[${JSON.stringify(idB)}, ${JSON.stringify(idC)}].every(id => __test.tileViews.get(id).source) && __test.audioLevel() > 0.05`)
+    await run(a, `document.querySelector('.share-tile[data-key="${idB}"] .share-tile-mute').click()`)
+    await until(a, `__test.tileViews.get(${JSON.stringify(idB)}).gain.gain.value < 0.01 && __test.tileViews.get(${JSON.stringify(idC)}).gain.gain.value > 0.99`)
+    await until(a, '__test.audioLevel() > 0.05')
+    await run(a, `document.querySelector('.share-tile[data-key="${idB}"] .share-tile-mute').click()`)
+    await until(a, `__test.tileViews.get(${JSON.stringify(idB)}).gain.gain.value > 0.99`)
+    console.log('PASS: Both shares\' audio mixes for a viewer, and each tile mutes on its own')
+
+    assert.deepEqual(await run(a, '[...document.querySelectorAll("#share-tabs .share-tab")].map(tab => tab.textContent)'), ['All', ...[idB, idC].sort().map((id) => (id === idB ? 'bravo' : 'charlie'))])
+    await run(a, '[...document.querySelectorAll("#share-tabs .share-tab")].find(tab => tab.textContent === "charlie").click()')
+    assert.deepEqual(await visibleTiles(a), [idC])
+    await run(a, `document.querySelector('.share-tile[data-key="${idC}"]').click()`)
+    assert.deepEqual(await visibleTiles(a), [idB, idC].sort())
+    await run(b, '[...document.querySelectorAll("#share-tabs .share-tab")].find(tab => tab.textContent === "You").click()')
+    assert.deepEqual(await visibleTiles(b), ['self'])
+    await run(b, '[...document.querySelectorAll("#share-tabs .share-tab")].find(tab => tab.textContent === "All").click()')
+    assert.deepEqual(await visibleTiles(b), ['self', idC])
+    if (process.argv.includes('--screenshots')) {
+      const screenshot = path.join(temporary, 'share-grid.png')
+      await run(b, "document.getElementById('room').classList.contains('people-open') && document.getElementById('people-toggle').click()")
+      await run(b, "document.getElementById('toast').hidden = true")
+      // A hidden window never repaints, so show it off-screen just long enough to capture.
+      b.setBounds({x: -4000, y: -4000, width: 1280, height: 720})
+      b.showInactive()
+      await pause(800)
+      fs.writeFileSync(screenshot, (await b.capturePage()).toPNG())
+      b.hide()
+      console.log(`Share grid screenshot: ${screenshot}`)
+    }
+    console.log('PASS: Tabs and tile clicks switch between one share full size and all of them')
+
+    await run(b, '__test.stopShare()')
+    await Promise.all([a, b].map((win) => until(win, `__test.session.role === "idle" && __test.tileViews.size === 1 && __test.tileViews.has(${JSON.stringify(idC)})`)))
+    await until(c, '__test.session.role === "idle" && Boolean(__test.session.screen) && __test.tileViews.size === 1')
+    await run(a, '__test.startShare({id: "screen:0:0", name: "Alpha screen"}); true')
+    await until(a, '__test.session.screen?.alongside === true && __test.session.role === "idle"')
+    await Promise.all([b, c].map((win) => until(win, `__test.tileViews.has(${JSON.stringify(idA)})`)))
+    console.log('PASS: The rest keep sharing after the host stops, and a new share joins them without claiming host')
+
+    await run(b, `__test.hostFile(${JSON.stringify(video)})`)
+    await Promise.all([a, c].map((win) => until(win, '!__test.session.screen && __test.tileViews.size === 0 && document.getElementById("remote-video").readyState >= 3')))
+    assert.equal(await run(b, '__test.tileViews.size'), 0)
+    console.log('PASS: Opening a movie ends every share and plays for everyone')
     for (const win of windows) assert.deepEqual(await run(win, '__test.errors'), [])
   } finally {
     clearTimeout(watchdog)

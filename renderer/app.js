@@ -33,7 +33,7 @@ import {drawConfetti, launchConfetti, stepConfetti} from './confetti.mjs'
 import {REACTIONS, createRateLimiter, playReactionSound} from './reactions.mjs'
 import {clampZoom, stepZoom, parseZoom, formatZoom, zoomPercent, MIN_ZOOM, MAX_ZOOM, DEFAULT_ZOOM} from './zoom.mjs'
 import {captionHtml} from './subtitles.mjs'
-import {shareSources, hidesTimeline, RESOLUTIONS, FRAME_RATES, DEFAULT_RESOLUTION, DEFAULT_FRAME_RATE, shareVideoConstraints, audioInputs, windowIdFromSource, AUDIO_BITRATES, DEFAULT_AUDIO_BITRATE, shareAudioBitrate} from './screenshare.mjs'
+import {shareSources, hidesTimeline, RESOLUTIONS, FRAME_RATES, DEFAULT_RESOLUTION, DEFAULT_FRAME_RATE, shareVideoConstraints, audioInputs, windowIdFromSource, AUDIO_BITRATES, DEFAULT_AUDIO_BITRATE, shareAudioBitrate, cleanPeerShare, shareTiles, shareView, gridColumns} from './screenshare.mjs'
 import {createAppAudioTrack} from './app-audio.mjs'
 import {
   DRAWER,
@@ -235,7 +235,9 @@ const ui = {
   sharePickerStatus: $('share-picker-status'),
   sharePickerList: $('share-picker-list'),
   screenSharing: $('screen-sharing'),
-  sharePreview: $('share-preview'),
+  shareGrid: $('share-grid'),
+  shareTabs: $('share-tabs'),
+  shareTiles: $('share-tiles'),
   screenSharingTitle: $('screen-sharing-title'),
   screenSharingAudio: $('screen-sharing-audio'),
   stopShare: $('stop-share'),
@@ -340,8 +342,12 @@ const blankSession = () => ({
   downloads: null,
   playlist: createPlaylist(),
   playing: null, // host: the playlist item being hosted {id, at}, so the next one can follow it
-  screen: null, // host: the share being shown {id, name, audio}
-  screenAudioCleanup: null, // host: stops the share's non-system audio source (device/app-audio)
+  screen: null, // your own share {id, name, audio, source, alongside}; alongside = sharing beside someone else's, not hosting
+  screenAudioCleanup: null, // stops your share's non-system audio source (device/app-audio)
+  shareAction: null,
+  shares: new Map(), // peerId -> {id, name, audio}: what each other sharer announced
+  shareView: 'all', // 'all', or the key of the one share tile shown full size
+  shareMuted: new Set(), // peer ids whose share audio this person muted
 })
 let session = blankSession()
 let roomHistory = null
@@ -530,6 +536,7 @@ async function openRoom(code, joining) {
     reactAction: room.makeAction('react'),
     imageAction: room.makeAction('image'),
     playlistAction: room.makeAction('playlist'),
+    shareAction: room.makeAction('share'),
   }
   const current = session
   const guard = (handler, options) => sessionHandler(current, () => session, handler, options)
@@ -578,6 +585,13 @@ async function openRoom(code, joining) {
     if (peerId === session.hostId && metadata?.id === session.remote?.image?.id) session.imageProgress = {id: metadata.id, percent}
   })
   session.reactAction.onMessage = limited('react', (message, {peerId}) => receiveReaction(message?.kind, peerId))
+  session.shareAction.onMessage = limited('share', (message, {peerId}) => {
+    const share = cleanPeerShare(message)
+    if (share === undefined) return
+    if (share) session.shares.set(peerId, share)
+    else session.shares.delete(peerId)
+    render()
+  })
   session.cuesAction.onRequest = limited('cues', async (request) => {
     if (!sameClaim(request, {hostId: selfId, claimedAt: current.claimedAt})) throw new Error('Media has changed')
     const catalog = current.catalog
@@ -612,7 +626,10 @@ async function openRoom(code, joining) {
       if (session.stream) Promise.all(room.addStream(session.stream, {target: peerId, metadata: {claimedAt: session.claimedAt}})).then(tuneSenders, () => {})
       if (session.image) sendImage(peerId)
       broadcastState(peerId)
+    } else if (session.screen?.alongside && session.stream) {
+      Promise.all(room.addStream(session.stream, {target: peerId, metadata: {claimedAt: Number(session.screen.id)}})).then(tuneSenders, () => {})
     }
+    if (session.screen) announceShare(peerId)
     render()
   }
 
@@ -627,6 +644,7 @@ async function openRoom(code, joining) {
       connection.error = null
     }
     session.peerStreams.delete(peerId)
+    session.shares.delete(peerId)
     session.people.delete(peerId)
     forgetImage(peerId)
     if (session.role === 'viewer' && peerId === session.hostId) {
@@ -652,6 +670,7 @@ async function openRoom(code, joining) {
     session.peerStreams.set(peerId, {stream, claimedAt: metadata.claimedAt})
     applyViewerBuffer(room.getPeers()[peerId])
     attachRemoteStream()
+    render() // a share's tile appears once its stream arrives
   }
 
   session.stateAction.onMessage = limited('state', (state, {peerId}) => receiveState(state, peerId))
@@ -694,6 +713,7 @@ async function leaveRoom() {
   checkpointPlayback()
   saveRoom()
   const finalSnapshot = current.playlistAction?.send({type: 'sync', ...playlistSnapshot(current.playlist)}).catch(() => {})
+  clearShare() // tells the others now, and stops an app-audio capture, which unpublishStream alone doesn't
   current.closed = true
   current.downloads?.dispose()
   closePlaylistMenu()
@@ -886,11 +906,23 @@ function clearHostImage() {
 
 // ---------- Screen sharing ----------
 // A share claims host the same way opening a file does, and has nothing to play, seek or loop,
-// like a picture (see cleanShare/hidesTimeline in screenshare.mjs).
+// like a picture (see cleanShare/hidesTimeline in screenshare.mjs). Only the first share claims:
+// while someone else's share is showing, yours runs alongside it without touching the host, and
+// every sharer announces its own share on the `share` action so viewers can show them all.
+
+const othersSharing = () => Boolean(session.remote?.screen) || session.shares.size > 0
+
+function announceShare(target) {
+  const screen = session.screen
+  try {
+    session.shareAction?.send(screen ? {id: screen.id, name: screen.name, audio: screen.audio} : {id: null}, target ? {target} : {}).catch(() => {})
+  } catch {}
+}
 
 function clearShare() {
+  const wasSharing = Boolean(session.screen)
   session.screen = null
-  ui.sharePreview.srcObject = null
+  if (wasSharing) announceShare()
   // Explicit, not just the track's 'ended' event: MediaStreamTrackGenerator (the app-audio path)
   // doesn't reliably fire 'ended' when stopped, so relying on that alone leaked the native
   // capture process — it kept running, never told to stop, every time a share ended cleanly
@@ -949,20 +981,32 @@ async function captureShareAudio(audioDeviceId, windowId) {
 async function startShare(source) {
   if (!session.room || session.closed) return
   const current = session
-  checkpointPlayback()
-  saveRoom()
-  const claimedAt = nextRevision(session.claimedAt, session.authority?.claimedAt, session.playlist.revision)
-  stopHosting()
-  session.restorePending = null
-  session.claimedAt = claimedAt
-  session.authority = {hostId: selfId, claimedAt, sequence: 0}
-  session.sequence = 0
-  session.mediaError = null
-  session.hostId = selfId
-  session.remote = null
-  detachRemoteStream()
-  setRole('host')
-  broadcastState()
+  const alongside = !isHost() && othersSharing()
+  const claimedAt = nextRevision(session.claimedAt, session.authority?.claimedAt, session.playlist.revision, Number(session.screen?.id))
+  if (alongside) {
+    // Switching source: the old capture goes first, same as a host's restart.
+    clearShare()
+    unpublishStream()
+    session.sharePending = claimedAt
+    session.claimedAt = claimedAt // so this peer's next claim can't reuse the id this share's stream carries
+  } else {
+    checkpointPlayback()
+    saveRoom()
+    stopHosting()
+    session.restorePending = null
+    session.claimedAt = claimedAt
+    session.authority = {hostId: selfId, claimedAt, sequence: 0}
+    session.sequence = 0
+    session.mediaError = null
+    session.hostId = selfId
+    session.remote = null
+    detachRemoteStream()
+    setRole('host')
+    broadcastState()
+  }
+  const owns = () => session === current && !current.closed && (alongside ? current.sharePending === claimedAt && !isHost() : current.claimedAt === claimedAt && isHost())
+  // A host's share is part of its state; one alongside it only has its own announcement.
+  const publish = () => (alongside ? announceShare() : broadcastState())
   try {
     const systemAudio = shareSettings.audioDeviceId === 'system'
     const selected = await window.api.selectScreenShareSource(source.id, {systemAudio})
@@ -970,7 +1014,7 @@ async function startShare(source) {
     const video = shareVideoConstraints(shareSettings.resolution, shareSettings.frameRate)
     const stream = await navigator.mediaDevices.getDisplayMedia({video, audio: systemAudio ? SHARE_AUDIO_CONSTRAINTS : false})
     const audio = await captureShareAudio(shareSettings.audioDeviceId, windowIdFromSource(source.id))
-    if (session !== current || current.closed || current.claimedAt !== claimedAt || !isHost()) {
+    if (!owns()) {
       stream.getTracks().forEach((track) => track.stop())
       audio?.cleanup()
       audio?.track.stop()
@@ -986,20 +1030,21 @@ async function startShare(source) {
         session.room.removeTrack(audio.track)
         stream.removeTrack(audio.track)
         session.screen = session.screen && {...session.screen, audio: stream.getAudioTracks().length > 0}
-        broadcastState()
+        publish()
       }, {once: true})
     }
-    session.screen = {id: String(claimedAt), name: source.name, source, audio: stream.getAudioTracks().length > 0}
+    session.sharePending = null
+    session.screen = {id: String(claimedAt), name: source.name, source, audio: stream.getAudioTracks().length > 0, alongside}
     session.screenAudioCleanup = audio?.cleanup ?? null
-    logEvent('screenshare', 'started', {audioDeviceId: shareSettings.audioDeviceId, audio: session.screen.audio, resolution: shareSettings.resolution, frameRate: shareSettings.frameRate})
+    logEvent('screenshare', 'started', {audioDeviceId: shareSettings.audioDeviceId, audio: session.screen.audio, resolution: shareSettings.resolution, frameRate: shareSettings.frameRate, alongside})
     // The track also ends on its own when the OS source closes or the browser's own share bar is used.
     stream.getVideoTracks()[0].addEventListener('ended', () => {
-      if (session === current && !current.closed && current.claimedAt === claimedAt && isHost()) stopShare()
+      if (session === current && !current.closed && session.stream === stream) stopShare()
     }, {once: true})
-    publishShareStream(stream)
-    ui.sharePreview.srcObject = stream
-    ui.sharePreview.play().catch(() => {})
-    broadcastState()
+    publishShareStream(stream, claimedAt)
+    if (!alongside) broadcastState()
+    announceShare()
+    render()
     const outgoingAudioTrack = stream.getAudioTracks()[0]
     if (outgoingAudioTrack) {
       sampleTrackAudioLevel(outgoingAudioTrack).then((rms) => {
@@ -1007,15 +1052,26 @@ async function startShare(source) {
       })
     }
   } catch (error) {
-    if (session !== current || current.closed || current.claimedAt !== claimedAt || !isHost()) return
-    failHosting(error)
+    if (!owns()) return
+    if (!alongside) return failHosting(error)
+    session.sharePending = null
+    logError('screenshare', 'start-failed', {alongside, message: errorMessage(error)})
+    toast(errorMessage(error), true)
+    render()
   }
 }
 
 function stopShare() {
+  session.sharePending = null
   if (!session.screen) return
-  logEvent('screenshare', 'stopped', {})
+  const {alongside} = session.screen
+  logEvent('screenshare', 'stopped', {alongside})
   clearShare()
+  if (alongside) {
+    unpublishStream()
+    render()
+    return
+  }
   broadcastState() // sent while still 'host', so viewers learn the share ended
   stopHosting()
 }
@@ -1124,7 +1180,7 @@ function unpublishStream() {
 
 // A screen share's stream already is what it is: unlike the file pipeline, its tracks are never
 // swapped mid-session, so this skips publishStream's addtrack/removetrack bookkeeping.
-function publishShareStream(stream) {
+function publishShareStream(stream, claimedAt) {
   unpublishStream()
   stream.getVideoTracks().forEach((track) => (track.contentHint = 'detail')) // text stays sharp
   session.stream = stream
@@ -1135,13 +1191,14 @@ function publishShareStream(stream) {
     stream.removeTrack(track)
   }
   stream.getTracks().forEach((track) => track.addEventListener('ended', () => removeTrack(track), {once: true}))
-  if (session.peers.size) Promise.all(session.room.addStream(stream, {metadata: {claimedAt: session.claimedAt}})).then(tuneSenders, () => {})
+  if (session.peers.size) Promise.all(session.room.addStream(stream, {metadata: {claimedAt}})).then(tuneSenders, () => {})
 }
 
 // Raise WebRTC's conservative defaults so a movie looks and sounds like a movie.
 async function tuneSenders() {
   const current = session
-  if (current.tuning || !isHost() || current.closed) return
+  // A share alongside someone else's sends too, without being host.
+  if (current.tuning || !(isHost() || current.screen?.alongside) || current.closed) return
   current.tuning = true
   try {
     for (const [peerId, pc] of Object.entries(current.room?.getPeers() || {})) {
@@ -1484,6 +1541,8 @@ function receiveState(value, peerId) {
   if (!state || !acceptsState(state, session.preview ? null : session.authority)) return
   session.restorePending = null
   const changed = !sameClaim(state, session.authority)
+  // A movie, picture or video replaces every share; another share, or a host with nothing left, doesn't.
+  if ((session.screen?.alongside || session.sharePending) && !state.screen && !stateIsIdle(state)) stopShare()
   if (isHost()) {
     const wasPreview = session.preview
     checkpointPlayback()
@@ -1528,14 +1587,14 @@ function receiveState(value, peerId) {
     youtube.sync(state.youtubeId, viewerTime(), state.playing && !state.buffering)
   } else {
     youtube.close()
-    if (state.ended || state.image) detachRemoteStream()
+    if (state.ended || state.image || state.screen) detachRemoteStream() // a share plays in the share grid
     else attachRemoteStream()
   }
   render()
 }
 
 function attachRemoteStream() {
-  if (session.role !== 'viewer' || session.remote?.youtubeId) return
+  if (session.role !== 'viewer' || session.remote?.youtubeId || session.remote?.screen) return
   const entry = session.peerStreams.get(session.hostId)
   const stream = entry?.claimedAt === session.remote?.claimedAt ? entry.stream : null
   if (stream && ui.remoteVideo.srcObject !== stream) {
@@ -2834,6 +2893,122 @@ function fillSelect(select, options, selected) {
   if (document.activeElement !== select) select.value = selected
 }
 
+// ---------- Share grid ----------
+// Every share in the room as equal tiles, or one of them full size (a tab, or click the tile).
+// Each other person's tile sends its sound through its own gain, the tile's mute button, into the
+// app's output, so all of them mix. Your own tile stays silent: your computer is already playing it.
+
+const tileViews = new Map() // tile key -> {root, video, label, mute, peerId, stream, track, source, gain, muted}
+
+function createTileView(tile) {
+  const root = element('div', 'share-tile')
+  root.dataset.key = tile.key
+  const video = document.createElement('video')
+  video.muted = true
+  video.playsInline = true
+  const label = element('div', 'share-tile-label')
+  root.append(video, label)
+  const view = {root, video, label, mute: null, peerId: tile.peerId, stream: tile.stream, track: null, source: null, gain: null, muted: false}
+  if (!tile.self) {
+    view.mute = element('button', 'icon share-tile-mute')
+    view.mute.append(ui.mute.querySelector('.icon-sound').cloneNode(true), ui.mute.querySelector('.icon-muted').cloneNode(true))
+    view.mute.addEventListener('click', (event) => {
+      event.stopPropagation()
+      if (!session.shareMuted.delete(tile.peerId)) session.shareMuted.add(tile.peerId)
+      render()
+    })
+    root.append(view.mute)
+  }
+  root.addEventListener('click', () => {
+    session.shareView = session.shareView === tile.key ? 'all' : tile.key
+    render()
+  })
+  video.srcObject = tile.stream
+  video.play().catch(() => {})
+  return view
+}
+
+function dropTileView(key) {
+  const view = tileViews.get(key)
+  view.source?.disconnect()
+  view.gain?.disconnect()
+  view.video.srcObject = null
+  view.root.remove()
+  tileViews.delete(key)
+}
+
+// Re-picks the live audio track as tracks come and go, the same rule routeRemoteAudio uses.
+function routeTileAudio(view) {
+  const tracks = view.stream.getAudioTracks().filter((track) => track.readyState === 'live')
+  const track = tracks.find((t) => !t.muted) || tracks[0] || null
+  if (track === view.track) return
+  view.source?.disconnect()
+  view.source = null
+  view.track = track
+  if (!track) return
+  const out = audioOutput()
+  if (!view.gain) {
+    view.gain = audio.createGain()
+    view.gain.gain.value = view.muted ? 0 : 1
+    view.gain.connect(out)
+  }
+  view.source = audio.createMediaStreamSource(new MediaStream([track]))
+  view.source.connect(view.gain)
+  // The only check in the chain that says whether real sound, not silence, reaches this viewer.
+  sampleAudioLevelFromNode(view.source, audio).then((rms) => logEvent('screenshare', 'received-audio-level', {peer: view.peerId, rms}))
+}
+
+const tileName = (tile) => (tile.self ? 'You' : person(tile.peerId).name || 'Joining…')
+
+// Returns how many tiles are showing.
+function renderShares() {
+  const self = session.screen && session.stream ? {name: session.screen.name, audio: session.screen.audio, stream: session.stream} : null
+  const hostScreen = session.role === 'viewer' ? session.remote?.screen : null
+  const tiles = session.room && !session.closed ? shareTiles({self, shares: session.shares, hostId: session.hostId, hostScreen, streams: session.peerStreams}) : []
+  session.shareView = shareView(session.shareView, tiles)
+  const keys = new Set(tiles.map((tile) => tile.key))
+  for (const [key, view] of [...tileViews]) if (!keys.has(key) || view.stream !== tiles.find((tile) => tile.key === key).stream) dropTileView(key)
+  tiles.forEach((tile, index) => {
+    if (!tileViews.has(tile.key)) tileViews.set(tile.key, createTileView(tile))
+    const view = tileViews.get(tile.key)
+    if (ui.shareTiles.children[index] !== view.root) ui.shareTiles.insertBefore(view.root, ui.shareTiles.children[index] || null)
+    view.root.classList.toggle('focused', session.shareView === tile.key)
+    view.label.textContent = [tileName(tile), tile.name].filter(Boolean).join(' · ')
+    if (tile.self) return
+    routeTileAudio(view)
+    const muted = session.shareMuted.has(tile.peerId)
+    if (view.gain && muted !== view.muted) view.gain.gain.setTargetAtTime(muted ? 0 : 1, audio.currentTime, 0.015)
+    view.muted = muted
+    view.mute.hidden = !tile.audio
+    view.mute.dataset.muted = String(muted)
+    view.mute.title = `${muted ? 'Unmute' : 'Mute'} ${tileName(tile)}`
+    view.mute.setAttribute('aria-pressed', String(muted))
+  })
+  const shown = session.shareView === 'all' ? tiles.length : 1
+  const columns = gridColumns(shown)
+  ui.shareTiles.dataset.focus = String(session.shareView !== 'all')
+  ui.shareTiles.style.setProperty('--columns', String(columns))
+  ui.shareTiles.style.setProperty('--rows', String(Math.max(1, Math.ceil(shown / columns))))
+  ui.shareGrid.hidden = !tiles.length
+
+  const tabs = tiles.length > 1 ? [{key: 'all', label: 'All'}, ...tiles.map((tile) => ({key: tile.key, label: tileName(tile)}))] : []
+  const signature = JSON.stringify([tabs, session.shareView])
+  if (ui.shareTabs.dataset.signature !== signature) {
+    ui.shareTabs.dataset.signature = signature
+    ui.shareTabs.replaceChildren(...tabs.map(({key, label}) => {
+      const tab = element('button', 'share-tab', label)
+      tab.setAttribute('aria-pressed', String(session.shareView === key))
+      tab.addEventListener('click', () => {
+        session.shareView = key
+        render()
+      })
+      return tab
+    }))
+  }
+  ui.shareTabs.hidden = !tabs.length
+  return tiles.length
+}
+
 function render() {
   const role = session.role
   const host = role === 'host'
@@ -2875,21 +3050,24 @@ function render() {
   const image = shownImage()
   const imageMode = Boolean(host ? session.image : r?.image)
   const shareMode = hidesTimeline(host ? session.screen : r?.screen)
+  const sharing = renderShares() > 0
+  ui.stage.classList.toggle('showing-shares', sharing)
   ui.pausedTitle.textContent = title || resume?.title || ''
-  ui.pausedTitle.hidden = !ui.pausedTitle.textContent || imageMode || shareMode || Boolean(youtube.videoId) || !(resume || (ready && !isPlaying()))
+  ui.pausedTitle.hidden = !ui.pausedTitle.textContent || imageMode || shareMode || sharing || Boolean(youtube.videoId) || !(resume || (ready && !isPlaying()))
   const receivingImage = role === 'viewer' && imageMode && !image
   if (receivingImage && performance.now() - session.imageRetryAt > 15_000) {
     session.imageRetryAt = performance.now()
     session.imageRequest.send({id: r.image.id}, {target: session.hostId, signal: session.lifetime.signal}).catch(() => {})
   }
   ui.stage.classList.toggle('showing-image', imageMode)
-  ui.stage.classList.toggle('sharing-screen', Boolean(host && session.screen))
-  ui.screenSharing.hidden = !(host && session.screen)
-  if (host && session.screen) {
+  ui.stage.classList.toggle('sharing-screen', Boolean(session.screen))
+  ui.screenSharing.hidden = !session.screen
+  if (session.screen) {
     ui.screenSharingTitle.textContent = `Sharing: ${session.screen.name}`
     ui.screenSharingAudio.hidden = session.screen.audio
   }
-  ui.shareScreen.hidden = !host && role !== 'idle'
+  // A viewer can share only beside someone else's share; taking over a movie means opening something.
+  ui.shareScreen.hidden = !host && role !== 'idle' && !othersSharing()
   const youtubeMode = Boolean(host ? youtube.videoId : r?.youtubeId)
   ui.stage.classList.toggle('showing-youtube', youtubeMode)
   ui.youtubePlayer.hidden = !youtubeMode
@@ -2906,7 +3084,7 @@ function render() {
   const audioOnly = ready && (host ? Boolean(player.media && !player.media.video) : Boolean(r?.audioOnly))
   ui.audioOnly.hidden = !audioOnly
   if (audioOnly) ui.audioOnlyTitle.textContent = title
-  const stalled = youtubeMode ? youtube.buffering : host ? player.loaded && hostPlaying() && ui.localVideo.readyState < 3 : role === 'viewer' && (r?.buffering || (ready && ui.remoteVideo.readyState < 2))
+  const stalled = youtubeMode ? youtube.buffering : host ? player.loaded && hostPlaying() && ui.localVideo.readyState < 3 : role === 'viewer' && !shareMode && (r?.buffering || (ready && ui.remoteVideo.readyState < 2))
   ui.spinner.hidden = !stalled || Boolean(mediaError) || Boolean(stale)
 
   ui.controls.classList.toggle('disabled', !ready)
@@ -3788,7 +3966,8 @@ function sampleAudioLevelFromNode(node, ctx, durationMs = 600) {
       setTimeout(() => {
         const data = new Float32Array(analyser.fftSize)
         analyser.getFloatTimeDomainData(data)
-        node.disconnect(analyser)
+        // Already gone if its tile closed within the window: everything it fed was disconnected then.
+        try { node.disconnect(analyser) } catch {}
         let sumSquares = 0
         for (const sample of data) sumSquares += sample * sample
         resolve(Math.sqrt(sumSquares / data.length))
@@ -3828,11 +4007,6 @@ function routeRemoteAudio(stream) {
   // removed. Give it exactly the live track we want instead of relying on ID order.
   remoteAudio = audio.createMediaStreamSource(new MediaStream([track]))
   remoteAudio.connect(out)
-  // A one-off level check specifically while watching a screen share, not for ordinary file
-  // playback: the open question here has been "does real audio ever reach the viewer at all".
-  if (session.remote?.screen) {
-    sampleAudioLevelFromNode(remoteAudio, audio).then((rms) => logEvent('screenshare', 'received-audio-level', {rms}))
-  }
 }
 
 function setVolume(volume) {
@@ -4085,6 +4259,7 @@ setInterval(sendStroke, 50)
 setInterval(() => sampleConnection().catch(() => {}), TELEMETRY_INTERVAL_MS)
 setInterval(() => { if (session.room && !session.closed) refreshAvailability() }, 10000)
 setInterval(() => {
+  if (session.screen?.alongside) tuneSenders()
   if (!isHost()) return
   broadcastState()
   tuneSenders()

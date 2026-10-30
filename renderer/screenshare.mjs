@@ -35,6 +35,39 @@ export function cleanShare(value, claimedAt) {
 // Whether playback controls (play/pause/seek/loop) should be disabled, matching imageMode.
 export const hidesTimeline = (share) => Boolean(share)
 
+// Each sharer also announces its own share on the room's `share` action, host or not, so several
+// people can share at once: {id, name, audio} while sharing, {id: null} once stopped. `id` is the
+// claimedAt the share's stream carries. Returns the share, null for a stop, undefined for junk.
+export function cleanPeerShare(value) {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return undefined
+  if (value.id === null) return null
+  if (typeof value.id !== 'string' || !/^\d{1,15}$/.test(value.id)) return undefined
+  return cleanShare(value, value.id) ?? undefined
+}
+
+// What the share grid shows: your own share first, then everyone else's by peer id. A peer's tile
+// appears once the stream carrying that share's id has arrived. The host's share is also read from
+// its state, so a host on a build without the `share` action still shows.
+export function shareTiles({self = null, shares = new Map(), hostId = null, hostScreen = null, streams = new Map()}) {
+  const tiles = []
+  if (self) tiles.push({key: 'self', peerId: null, self: true, name: self.name, audio: self.audio, stream: self.stream})
+  const announced = new Map(shares)
+  if (hostId && hostScreen && !announced.has(hostId)) announced.set(hostId, hostScreen)
+  for (const peerId of [...announced.keys()].sort()) {
+    const share = announced.get(peerId)
+    const entry = streams.get(peerId)
+    if (!entry || String(entry.claimedAt) !== share.id) continue
+    tiles.push({key: peerId, peerId, self: false, name: share.name, audio: share.audio, stream: entry.stream})
+  }
+  return tiles
+}
+
+// 'all', or the key of the one tile shown full size. A focus on a tile that's gone falls back to all.
+export const shareView = (view, tiles) => (tiles.length > 1 && tiles.some((tile) => tile.key === view) ? view : 'all')
+
+// Equal tiles: 2 side by side, 3–4 as 2×2, 5–8 as 3 columns.
+export const gridColumns = (count) => Math.max(1, Math.ceil(Math.sqrt(count)))
+
 // Offered in Settings, and as the constraints passed to getDisplayMedia/applyConstraints.
 // Native omits width/height so the capture isn't scaled at all.
 export const RESOLUTIONS = [

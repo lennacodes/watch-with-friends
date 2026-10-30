@@ -238,6 +238,9 @@
         <video id="remote-video" class="remote" playsinline></video>
         <div id="youtube-player" class="youtube-player" hidden></div>
         <img id="picture" class="picture" alt="" draggable="false" hidden />
+        <div id="share-grid" class="share-grid" hidden>
+          <div id="share-tiles" class="share-tiles"></div>
+        </div>
         <div id="captions" class="captions"></div>
         <canvas id="board" class="board"></canvas>
 
@@ -245,11 +248,13 @@
           <svg viewBox="0 0 24 24"><path d="M12 3v10.55A4 4 0 1 0 14 17V7h4V3z" /></svg>
           <p id="audio-only-title"></p>
         </div>
-        <div id="screen-sharing" class="screen-sharing" hidden>
-          <video id="share-preview" class="share-preview" muted></video>
-          <p id="screen-sharing-title"></p>
-          <p id="screen-sharing-audio" class="hint" hidden>No audio source selected &mdash; viewers see video only. Pick one in Settings.</p>
-          <button id="stop-share">Stop sharing</button>
+        <div class="share-bar">
+          <div id="share-tabs" class="share-tabs" role="group" aria-label="Shown shares" hidden></div>
+          <div id="screen-sharing" class="screen-sharing" hidden>
+            <p id="screen-sharing-title"></p>
+            <button id="stop-share">Stop sharing</button>
+            <p id="screen-sharing-audio" class="hint" hidden>No audio source selected &mdash; others see video only. Pick one in Settings.</p>
+          </div>
         </div>
         <div id="empty" class="empty">
           <p id="empty-text"></p>

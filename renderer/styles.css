@@ -2070,35 +2070,167 @@ button:disabled {
   display: none;
 }
 
-.stage.sharing-screen video.local {
+.stage.sharing-screen video.local,
+.stage.showing-shares video.local,
+.stage.showing-shares video.remote {
   display: none;
 }
 
-.screen-sharing {
+.stage.showing-shares[data-role] .empty {
+  display: none;
+}
+
+/* Every share as an equal tile; with one focused, only that one, full size. Shares have no
+   timeline, so the top bar and controls never hide: the tiles sit between them. */
+.share-grid {
   position: absolute;
   inset: 0;
+  padding: 60px 8px 76px;
+}
+
+.share-tiles {
+  display: grid;
+  grid-template-columns: repeat(var(--columns, 1), minmax(0, 1fr));
+  grid-template-rows: repeat(var(--rows, 1), minmax(0, 1fr));
+  gap: 8px;
+  width: 100%;
+  height: 100%;
+}
+
+.share-tiles[data-focus='true'] .share-tile:not(.focused) {
+  display: none;
+}
+
+.share-tile {
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+  border-radius: 8px;
+  overflow: hidden;
+  background: #000;
+  cursor: zoom-in;
+}
+
+.share-tiles:not([data-focus='true']) .share-tile {
+  outline: 1px solid var(--line);
+}
+
+.share-tile.focused {
+  cursor: zoom-out;
+}
+
+.stage .share-tile video {
+  display: block;
+}
+
+.share-tile-label {
+  position: absolute;
+  left: 8px;
+  bottom: 8px;
+  max-width: calc(100% - 64px);
+  padding: 3px 8px;
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.6);
+  color: #fff;
+  font-size: 13px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  pointer-events: none;
+}
+
+.share-tile-mute {
+  position: absolute;
+  right: 8px;
+  bottom: 8px;
+  padding: 5px;
+  border: 0;
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.6);
+}
+
+.share-tile-mute svg {
+  display: block;
+  width: 20px;
+  height: 20px;
+  fill: #fff;
+}
+
+.share-tile-mute[data-muted='true'] .icon-sound,
+.share-tile-mute[data-muted='false'] .icon-muted {
+  display: none;
+}
+
+.share-tile-mute[data-muted='true'] {
+  background: rgba(255, 107, 107, 0.85);
+}
+
+/* Tabs to pick what's shown, and your own share's status, floating at the top of the stage. */
+.share-bar {
+  position: absolute;
+  top: 64px;
+  left: 50%;
+  transform: translateX(-50%);
+  max-width: calc(100% - 32px);
   display: flex;
   flex-direction: column;
   align-items: center;
+  gap: 6px;
+  pointer-events: none;
+}
+
+.share-bar > * {
+  pointer-events: auto;
+}
+
+.share-tabs,
+.screen-sharing {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px;
+  border-radius: 10px;
+  background: rgba(11, 11, 15, 0.8);
+  border: 1px solid var(--line);
+}
+
+.share-tab {
+  padding: 4px 12px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.share-tab[aria-pressed='true'] {
+  background: var(--accent);
+  color: #fff;
+}
+
+.screen-sharing {
+  flex-wrap: wrap;
   justify-content: center;
-  gap: 12px;
-  color: rgba(255, 255, 255, 0.75);
-  text-align: center;
+  gap: 8px;
+  padding: 4px 4px 4px 12px;
+  color: rgba(255, 255, 255, 0.85);
 }
 
 .screen-sharing p {
-  max-width: 80%;
   margin: 0;
-  font-size: 18px;
+  font-size: 14px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 40ch;
 }
 
-.share-preview {
-  width: min(480px, 70%);
-  aspect-ratio: 16 / 9;
-  object-fit: contain;
-  background: #000;
-  border: 1px solid var(--line);
-  border-radius: 10px;
+.screen-sharing .hint {
+  flex-basis: 100%;
+  padding-bottom: 4px;
+  text-align: center;
+  white-space: normal;
+  max-width: none;
 }
 
 #share-picker .modal-card {

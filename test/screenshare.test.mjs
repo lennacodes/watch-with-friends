@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import {MAX_SOURCES, MAX_SOURCE_NAME, cleanShare, hidesTimeline, shareSources, RESOLUTIONS, FRAME_RATES, DEFAULT_RESOLUTION, DEFAULT_FRAME_RATE, shareVideoConstraints, audioInputs, windowIdFromSource, AUDIO_BITRATES, DEFAULT_AUDIO_BITRATE, shareAudioBitrate} from '../renderer/screenshare.mjs'
+import {MAX_SOURCES, MAX_SOURCE_NAME, cleanShare, hidesTimeline, shareSources, RESOLUTIONS, FRAME_RATES, DEFAULT_RESOLUTION, DEFAULT_FRAME_RATE, shareVideoConstraints, audioInputs, windowIdFromSource, AUDIO_BITRATES, DEFAULT_AUDIO_BITRATE, shareAudioBitrate, cleanPeerShare, shareTiles, shareView, gridColumns} from '../renderer/screenshare.mjs'
 
 test('shareSources shapes raw desktopCapturer output for the picker and drops junk entries', () => {
   const raw = [
@@ -105,4 +105,44 @@ test('audioInputs caps the list and tolerates non-array input', () => {
   assert.equal(audioInputs(many).length, 50)
   assert.deepEqual(audioInputs(null), [])
   assert.deepEqual(audioInputs(undefined), [])
+})
+
+test('cleanPeerShare accepts a share announcement or a stop, and rejects junk', () => {
+  assert.deepEqual(cleanPeerShare({id: '17', name: 'Firefox', audio: true}), {id: '17', name: 'Firefox', audio: true})
+  assert.equal(cleanPeerShare({id: null}), null)
+  for (const bad of [null, [], 'x', {}, {id: 17}, {id: '-1'}, {id: '1e3'}, {id: '1'.repeat(16)}, {id: '5', name: 3}, {id: '5', audio: 'yes'}]) {
+    assert.equal(cleanPeerShare(bad), undefined, JSON.stringify(bad))
+  }
+})
+
+test('shareTiles puts your own share first, then peers by id, each once its matching stream arrives', () => {
+  const stream = (name) => ({name})
+  const tiles = shareTiles({
+    self: {name: 'My window', audio: true, stream: stream('mine')},
+    shares: new Map([['zed', {id: '9', name: 'Zed screen', audio: false}], ['amy', {id: '7', name: 'Amy screen', audio: true}], ['bob', {id: '8', name: 'Bob', audio: true}]]),
+    streams: new Map([['zed', {claimedAt: 9, stream: stream('z')}], ['amy', {claimedAt: 7, stream: stream('a')}], ['bob', {claimedAt: 6, stream: stream('old')}]]),
+  })
+  assert.deepEqual(tiles.map((t) => t.key), ['self', 'amy', 'zed'], "bob's stream is from an older share, so it waits")
+  assert.equal(tiles[0].self, true)
+  assert.equal(tiles[1].stream.name, 'a')
+  assert.equal(tiles[2].audio, false)
+})
+
+test("shareTiles shows the host's share from its state when it never announced one", () => {
+  const streams = new Map([['host', {claimedAt: 40, stream: {}}]])
+  assert.deepEqual(shareTiles({hostId: 'host', hostScreen: {id: '40', name: 'Screen', audio: true}, streams}).map((t) => t.key), ['host'])
+  assert.deepEqual(shareTiles({hostId: 'host', hostScreen: null, streams}), [])
+  assert.deepEqual(shareTiles({}), [])
+})
+
+test('shareView keeps a focus only while that tile exists and there is more than one', () => {
+  const tiles = [{key: 'self'}, {key: 'amy'}]
+  assert.equal(shareView('amy', tiles), 'amy')
+  assert.equal(shareView('bob', tiles), 'all')
+  assert.equal(shareView('self', [{key: 'self'}]), 'all')
+  assert.equal(shareView('all', tiles), 'all')
+})
+
+test('gridColumns lays out equal tiles', () => {
+  assert.deepEqual([0, 1, 2, 3, 4, 5, 8].map(gridColumns), [1, 1, 2, 2, 2, 3, 3])
 })
