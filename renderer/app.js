@@ -903,6 +903,7 @@ async function captureShareAudio(audioDeviceId, windowId) {
     try {
       ;({id} = await window.api.startAppAudio(windowId))
     } catch (error) {
+      logError('screenshare', 'app-audio-start-failed', {windowId, message: errorMessage(error)})
       toast(`Could not capture that app's audio: ${errorMessage(error)}`, true)
       return null
     }
@@ -918,6 +919,7 @@ async function captureShareAudio(audioDeviceId, windowId) {
     const track = micStream.getAudioTracks()[0]
     return track ? {track, cleanup: () => {}} : null
   } catch (error) {
+    logError('screenshare', 'device-audio-failed', {message: errorMessage(error)})
     toast(`Could not use the selected audio source: ${errorMessage(error)}`, true)
     return null
   }
@@ -959,6 +961,7 @@ async function startShare(source) {
       audio.track.addEventListener('ended', () => {
         audio.cleanup()
         if (session !== current || session.stream !== stream || !stream.getTracks().includes(audio.track)) return
+        logEvent('screenshare', 'audio-dropped', {audioDeviceId: shareSettings.audioDeviceId})
         session.room.removeTrack(audio.track)
         stream.removeTrack(audio.track)
         session.screen = session.screen && {...session.screen, audio: stream.getAudioTracks().length > 0}
@@ -966,6 +969,7 @@ async function startShare(source) {
       }, {once: true})
     }
     session.screen = {id: String(claimedAt), name: source.name, source, audio: stream.getAudioTracks().length > 0}
+    logEvent('screenshare', 'started', {audioDeviceId: shareSettings.audioDeviceId, audio: session.screen.audio, resolution: shareSettings.resolution, frameRate: shareSettings.frameRate})
     // The track also ends on its own when the OS source closes or the browser's own share bar is used.
     stream.getVideoTracks()[0].addEventListener('ended', () => {
       if (session === current && !current.closed && current.claimedAt === claimedAt && isHost()) stopShare()
@@ -982,6 +986,7 @@ async function startShare(source) {
 
 function stopShare() {
   if (!session.screen) return
+  logEvent('screenshare', 'stopped', {})
   clearShare()
   broadcastState() // sent while still 'host', so viewers learn the share ended
   stopHosting()

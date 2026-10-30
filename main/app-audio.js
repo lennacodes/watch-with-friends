@@ -11,6 +11,11 @@ const binaryPath = () =>
 
 const HIGH_WATER_BYTES = 4 * 1024 * 1024
 const MAX_PULL_BYTES = 1024 * 1024
+// ScreenCaptureKit can report a stream started successfully and then silently deliver nothing —
+// the known failure mode when this binary hasn't been separately granted Screen & System Audio
+// Recording permission (it's a distinct executable from the main app, with its own TCC entry).
+// Treat that as a real failure instead of a share that's just quiet.
+const SILENCE_TIMEOUT_MS = 5000
 
 const sessions = new Map()
 let nextSessionId = 1
@@ -42,6 +47,12 @@ function startSession(windowId) {
       if (line === 'ready') {
         const id = nextSessionId++
         sessions.set(id, session)
+        session.silenceTimer = setTimeout(() => {
+          if (session.receivedAnyData || session.done) return
+          session.error = 'No audio arrived within 5s of starting — this likely needs Screen & System Audio Recording permission granted to mac-app-audio in System Settings > Privacy & Security.'
+          session.done = true
+          wake()
+        }, SILENCE_TIMEOUT_MS)
         resolve({id})
       } else {
         proc.kill()
@@ -49,12 +60,17 @@ function startSession(windowId) {
       }
     })
     proc.stdout.on('data', (buf) => {
+      if (!session.receivedAnyData) {
+        session.receivedAnyData = true
+        clearTimeout(session.silenceTimer)
+      }
       session.chunks.push(buf)
       session.size += buf.length
       if (session.size > HIGH_WATER_BYTES) proc.stdout.pause()
       wake()
     })
     proc.on('error', (err) => {
+      clearTimeout(session.silenceTimer)
       session.error = err.message
       session.done = true
       wake()
@@ -64,6 +80,7 @@ function startSession(windowId) {
       }
     })
     proc.on('close', (code) => {
+      clearTimeout(session.silenceTimer)
       session.done = true
       if (code !== 0 && !session.killed && !session.error) session.error = `mac-app-audio exited with code ${code}`
       wake()
@@ -102,6 +119,7 @@ function stopSession(id) {
   const session = sessions.get(id)
   if (!session) return
   sessions.delete(id)
+  clearTimeout(session.silenceTimer)
   session.killed = true
   session.proc.kill()
   session.wake()

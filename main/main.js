@@ -160,10 +160,25 @@ function registerIpc() {
   })
   ipcMain.handle('appaudio:start', async (_event, windowId) => {
     if (!Number.isInteger(windowId) || windowId < 0) throw new Error('Invalid window id')
-    return appAudio.startSession(windowId)
+    try {
+      const started = await appAudio.startSession(windowId)
+      log.record('appaudio', 'start', {windowId, ...started})
+      return started
+    } catch (error) {
+      log.record('appaudio', 'start-failed', {windowId, message: error?.message}, 'error')
+      throw error
+    }
   })
-  ipcMain.handle('appaudio:pull', (_event, id) => appAudio.pull(id))
-  ipcMain.handle('appaudio:stop', (_event, id) => appAudio.stopSession(id))
+  ipcMain.handle('appaudio:pull', async (_event, id) => {
+    const result = await appAudio.pull(id)
+    if (result?.error) log.record('appaudio', 'failed', {id, message: result.error}, 'error')
+    else if (result?.done) log.record('appaudio', 'done', {id})
+    return result
+  })
+  ipcMain.handle('appaudio:stop', (_event, id) => {
+    log.record('appaudio', 'stop', {id})
+    return appAudio.stopSession(id)
+  })
   ipcMain.handle('session:start', async (_event, options) => {
     try {
       const started = await media.startSession(options)
