@@ -146,6 +146,22 @@
           </div>
         </section>
         <section class="settings-section">
+          <h2>Screen sharing</h2>
+          <div class="settings-row">
+            <label for="share-resolution">Resolution</label>
+            <select id="share-resolution"></select>
+          </div>
+          <div class="settings-row">
+            <label for="share-framerate">Frame rate</label>
+            <select id="share-framerate"></select>
+          </div>
+          <div class="settings-row">
+            <label for="share-audio-device">Audio source</label>
+            <select id="share-audio-device"></select>
+          </div>
+          <p class="hint">Applies the next time you share, and right away if you're sharing now. For system or app audio on macOS, pick a virtual audio device such as BlackHole as the source; Windows can also use "System audio" directly.</p>
+        </section>
+        <section class="settings-section">
           <h2>Having problems?</h2>
           <p class="hint">Saves a file describing the last few hours: connection quality, who joined, and anything that failed. Send it to whoever is helping you. File names and network addresses are removed.</p>
           <textarea id="diagnostics-note" class="settings-note" maxlength="2000" rows="3" spellcheck="true" placeholder="What went wrong? (optional, but it helps to know roughly when)" aria-label="What went wrong"></textarea>
@@ -226,8 +242,9 @@
           <p id="audio-only-title"></p>
         </div>
         <div id="screen-sharing" class="screen-sharing" hidden>
+          <video id="share-preview" class="share-preview" muted></video>
           <p id="screen-sharing-title"></p>
-          <p id="screen-sharing-audio" class="hint" hidden>No system audio on this platform yet &mdash; viewers see video only.</p>
+          <p id="screen-sharing-audio" class="hint" hidden>No audio source selected &mdash; viewers see video only. Pick one in Settings.</p>
           <button id="stop-share">Stop sharing</button>
         </div>
         <div id="empty" class="empty">

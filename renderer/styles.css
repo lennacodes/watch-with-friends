@@ -2092,6 +2092,15 @@ button:disabled {
   font-size: 18px;
 }
 
+.share-preview {
+  width: min(480px, 70%);
+  aspect-ratio: 16 / 9;
+  object-fit: contain;
+  background: #000;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+
 #share-picker .modal-card {
   width: min(640px, 100%);
 }

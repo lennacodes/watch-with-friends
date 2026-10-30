@@ -25,6 +25,7 @@ const downloadStores = new Map()
 // the display-media handler below. Only a source this list itself just returned is ever granted.
 let shareSourcesById = new Map()
 let pendingShareSourceId = null
+let pendingShareSystemAudio = false
 function downloadStore(contents) {
   if (!downloadStores.has(contents.id)) {
     const contentsId = contents.id
@@ -100,14 +101,17 @@ const pickFile = (event, name, extensions) => pickFiles(event, name, extensions)
 function registerIpc() {
   // Our own picker runs in the renderer; this only ever grants a source screenshare:sources
   // just listed and screenshare:select just accepted, never an arbitrary id from the page.
-  // System audio ('loopback') is Windows only (see Streams.audio in Electron's docs); elsewhere
-  // the share is video only, which the renderer detects from the resulting stream's track count.
+  // System audio ('loopback') is Windows only (see Streams.audio in Electron's docs) and only
+  // when the renderer actually asked for it; elsewhere, or for a specific device, the renderer
+  // captures audio itself via getUserMedia and merges it into the share's stream.
   session.defaultSession.setDisplayMediaRequestHandler((request, callback) => {
     const id = pendingShareSourceId
+    const systemAudio = pendingShareSystemAudio
     pendingShareSourceId = null
+    pendingShareSystemAudio = false
     const source = id && shareSourcesById.get(id)
     if (!source) return callback({})
-    callback({video: source, ...(process.platform === 'win32' && {audio: 'loopback'})})
+    callback({video: source, ...(systemAudio && process.platform === 'win32' && {audio: 'loopback'})})
   }, {useSystemPicker: false})
   ipcMain.handle('app:version', () => app.getVersion())
   ipcMain.handle('app:open-project', () => shell.openExternal('https://github.com/onlineslav/watch-with-friends'))
@@ -145,8 +149,9 @@ function registerIpc() {
     shareSourcesById = new Map(sources.map((source) => [source.id, source]))
     return sources.map((source) => ({id: source.id, name: source.name, thumbnail: source.thumbnail.isEmpty() ? null : source.thumbnail.toDataURL()}))
   })
-  ipcMain.handle('screenshare:select', (_event, id) => {
+  ipcMain.handle('screenshare:select', (_event, id, options) => {
     pendingShareSourceId = typeof id === 'string' && shareSourcesById.has(id) ? id : null
+    pendingShareSystemAudio = Boolean(options?.systemAudio)
     return Boolean(pendingShareSourceId)
   })
   ipcMain.handle('session:start', async (_event, options) => {

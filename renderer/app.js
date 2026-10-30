@@ -33,7 +33,7 @@ import {drawConfetti, launchConfetti, stepConfetti} from './confetti.mjs'
 import {REACTIONS, createRateLimiter, playReactionSound} from './reactions.mjs'
 import {clampZoom, stepZoom, parseZoom, formatZoom, zoomPercent, MIN_ZOOM, MAX_ZOOM, DEFAULT_ZOOM} from './zoom.mjs'
 import {captionHtml} from './subtitles.mjs'
-import {shareSources, hidesTimeline} from './screenshare.mjs'
+import {shareSources, hidesTimeline, RESOLUTIONS, FRAME_RATES, DEFAULT_RESOLUTION, DEFAULT_FRAME_RATE, shareVideoConstraints, audioInputs} from './screenshare.mjs'
 import {
   DRAWER,
   MAX_ITEMS,
@@ -230,9 +230,13 @@ const ui = {
   sharePickerStatus: $('share-picker-status'),
   sharePickerList: $('share-picker-list'),
   screenSharing: $('screen-sharing'),
+  sharePreview: $('share-preview'),
   screenSharingTitle: $('screen-sharing-title'),
   screenSharingAudio: $('screen-sharing-audio'),
   stopShare: $('stop-share'),
+  shareResolution: $('share-resolution'),
+  shareFramerate: $('share-framerate'),
+  shareAudioDevice: $('share-audio-device'),
   leave: $('leave'),
   stage: $('stage'),
   localVideo: $('local-video'),
@@ -879,6 +883,23 @@ function clearHostImage() {
 
 function clearShare() {
   session.screen = null
+  ui.sharePreview.srcObject = null
+}
+
+// Acquires the chosen audio source as its own track, separate from the display capture: a
+// specific device (a microphone, or a virtual device like BlackHole mirroring system/app audio
+// on macOS) works the same way on every platform, since getDisplayMedia's own audio is Windows
+// loopback only. Returns null for 'system' (handled by main's display-media handler instead) or
+// 'none'.
+async function captureShareAudioDevice(deviceId) {
+  if (!deviceId || deviceId === 'system') return null
+  try {
+    const micStream = await navigator.mediaDevices.getUserMedia({audio: {deviceId: {exact: deviceId}}})
+    return micStream.getAudioTracks()[0] || null
+  } catch (error) {
+    toast(`Could not use the selected audio source: ${errorMessage(error)}`, true)
+    return null
+  }
 }
 
 async function startShare(source) {
@@ -899,19 +920,36 @@ async function startShare(source) {
   setRole('host')
   broadcastState()
   try {
-    const selected = await window.api.selectScreenShareSource(source.id)
+    const systemAudio = shareSettings.audioDeviceId === 'system'
+    const selected = await window.api.selectScreenShareSource(source.id, {systemAudio})
     if (!selected) throw new Error('That source is no longer available. Try again.')
-    const stream = await navigator.mediaDevices.getDisplayMedia({video: true, audio: true})
+    const video = shareVideoConstraints(shareSettings.resolution, shareSettings.frameRate)
+    const stream = await navigator.mediaDevices.getDisplayMedia({video, audio: systemAudio})
+    const deviceTrack = await captureShareAudioDevice(shareSettings.audioDeviceId)
     if (session !== current || current.closed || current.claimedAt !== claimedAt || !isHost()) {
       stream.getTracks().forEach((track) => track.stop())
+      deviceTrack?.stop()
       return
     }
-    session.screen = {id: String(claimedAt), name: source.name, audio: stream.getAudioTracks().length > 0}
+    if (deviceTrack) {
+      stream.addTrack(deviceTrack)
+      // A device can disconnect mid-share (unplugged, its app closed): drop it, keep the video.
+      deviceTrack.addEventListener('ended', () => {
+        if (session !== current || session.stream !== stream || !stream.getTracks().includes(deviceTrack)) return
+        session.room.removeTrack(deviceTrack)
+        stream.removeTrack(deviceTrack)
+        session.screen = session.screen && {...session.screen, audio: stream.getAudioTracks().length > 0}
+        broadcastState()
+      }, {once: true})
+    }
+    session.screen = {id: String(claimedAt), name: source.name, source, audio: stream.getAudioTracks().length > 0}
     // The track also ends on its own when the OS source closes or the browser's own share bar is used.
-    stream.getTracks().forEach((track) => track.addEventListener('ended', () => {
+    stream.getVideoTracks()[0].addEventListener('ended', () => {
       if (session === current && !current.closed && current.claimedAt === claimedAt && isHost()) stopShare()
-    }, {once: true}))
+    }, {once: true})
     publishShareStream(stream)
+    ui.sharePreview.srcObject = stream
+    ui.sharePreview.play().catch(() => {})
     broadcastState()
   } catch (error) {
     if (session !== current || current.closed || current.claimedAt !== claimedAt || !isHost()) return
@@ -924,6 +962,24 @@ function stopShare() {
   clearShare()
   broadcastState() // sent while still 'host', so viewers learn the share ended
   stopHosting()
+}
+
+// A resolution/frame rate change applies live, without restarting the capture. Audio source
+// changes restart the share (same precedent as switching which window/screen is shared): a
+// device's track can be added/removed live, but enabling Windows loopback can only be granted
+// by the original getDisplayMedia call, so there's no live path that covers both.
+function restartShare() {
+  if (session.screen) startShare(session.screen.source)
+}
+
+async function applyShareVideoConstraints() {
+  const track = session.stream?.getVideoTracks()[0]
+  if (!session.screen || !track) return
+  try {
+    await track.applyConstraints(shareVideoConstraints(shareSettings.resolution, shareSettings.frameRate))
+  } catch (error) {
+    toast(`Could not change resolution or frame rate: ${errorMessage(error)}`, true)
+  }
 }
 
 // Kept per sender until they send another, so a picture that arrives before its state still shows.
@@ -3271,6 +3327,7 @@ function showSettings(open) {
     parent.append(ui.settings)
     ui.newUsername.disabled = inRoom
     ui.newUsername.title = inRoom ? 'Leave the room to change your username' : ''
+    populateAudioDevices({probe: true}) // pick up a virtual audio device installed since the list was last built
   }
   ui.settings.hidden = !open
 }
@@ -3340,6 +3397,65 @@ ui.zoomPercent.addEventListener('keydown', (event) => {
 })
 
 applyZoom(zoom)
+
+// ---------- Screen sharing settings ----------
+// Persisted like uiScale; shareVideoConstraints tolerates a stale or invalid saved value.
+const DEFAULT_SHARE_SETTINGS = {resolution: DEFAULT_RESOLUTION, frameRate: DEFAULT_FRAME_RATE, audioDeviceId: window.api.platform === 'win32' ? 'system' : ''}
+let shareSettings = {...DEFAULT_SHARE_SETTINGS}
+try {
+  const saved = JSON.parse(localStorage.getItem('shareSettings') || 'null')
+  if (saved && typeof saved === 'object') shareSettings = {...DEFAULT_SHARE_SETTINGS, ...saved}
+} catch {}
+
+function saveShareSettings() {
+  try {
+    localStorage.setItem('shareSettings', JSON.stringify(shareSettings))
+  } catch {}
+}
+
+fillSelect(ui.shareResolution, RESOLUTIONS, shareSettings.resolution)
+fillSelect(ui.shareFramerate, FRAME_RATES.map((fps) => ({value: String(fps), label: `${fps} fps`})), String(shareSettings.frameRate))
+
+// Device ids and labels are hidden until the mic permission prompt has been answered once, so the
+// list would otherwise be unusably empty on first use. Only ask for it (`probe: true`) when the
+// person has actually opened Settings — not at launch, and not just because a device changed.
+async function populateAudioDevices({probe = false} = {}) {
+  let devices = []
+  try {
+    devices = await navigator.mediaDevices.enumerateDevices()
+  } catch {}
+  if (probe && devices.some((d) => d.kind === 'audioinput') && !devices.some((d) => d.kind === 'audioinput' && d.deviceId)) {
+    try {
+      const probeStream = await navigator.mediaDevices.getUserMedia({audio: true})
+      probeStream.getTracks().forEach((track) => track.stop())
+      devices = await navigator.mediaDevices.enumerateDevices()
+    } catch {}
+  }
+  const options = [
+    {value: '', label: 'None'},
+    ...(window.api.platform === 'win32' ? [{value: 'system', label: 'System audio'}] : []),
+    ...audioInputs(devices).map((d) => ({value: d.deviceId, label: d.label})),
+  ]
+  fillSelect(ui.shareAudioDevice, options, shareSettings.audioDeviceId)
+}
+populateAudioDevices()
+navigator.mediaDevices.addEventListener('devicechange', () => populateAudioDevices())
+
+ui.shareResolution.addEventListener('change', () => {
+  shareSettings.resolution = ui.shareResolution.value
+  saveShareSettings()
+  applyShareVideoConstraints()
+})
+ui.shareFramerate.addEventListener('change', () => {
+  shareSettings.frameRate = Number(ui.shareFramerate.value)
+  saveShareSettings()
+  applyShareVideoConstraints()
+})
+ui.shareAudioDevice.addEventListener('change', () => {
+  shareSettings.audioDeviceId = ui.shareAudioDevice.value
+  saveShareSettings()
+  if (session.screen) restartShare()
+})
 
 ui.openSettings.addEventListener('click', () => showSettings(true))
 ui.roomSettings.addEventListener('click', () => showSettings(true))
