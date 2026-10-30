@@ -35,6 +35,7 @@ test('screen-share state validates like a picture and an unknown field is simply
     assert.equal(cleanState(state({screen}), 'host'), null, JSON.stringify(screen))
   }
   assert.equal(cleanState(state({screen: {id: '1'}, image: {id: '1'}}), 'host'), null, 'cannot claim both at once')
+  assert.equal(cleanState(state({screen: {id: '1'}, youtubeId: 'M7lc1UVf-VE'}), 'host'), null, 'cannot claim youtube and a share at once')
   assert.equal(cleanState(state({unknownFutureField: 'anything'}), 'host').unknownFutureField, undefined)
 })
 

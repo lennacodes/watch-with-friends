@@ -66,7 +66,7 @@ export function cleanState(value, peerId) {
   if (value.playlistId !== null && !isId(value.playlistId)) return null
   if (value.playlistPosition !== undefined && !Number.isFinite(value.playlistPosition)) return null
   if (value.finished !== undefined && typeof value.finished !== 'boolean') return null
-  if (value.youtubeId != null && (!isYouTubeId(value.youtubeId) || value.image)) return null
+  if (value.youtubeId != null && (!isYouTubeId(value.youtubeId) || value.image || screen)) return null
   if (value.title != null && (typeof value.title !== 'string' || value.title.length > 1000)) return null
   const viewers = {}, senders = {}
   for (const [field, cleaner, out] of [['viewers', cleanTelemetry, viewers], ['senders', cleanSender, senders]]) {
