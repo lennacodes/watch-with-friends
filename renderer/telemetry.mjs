@@ -27,11 +27,18 @@ export function readStats(report, {audioOnly = false} = {}) {
   report.forEach((s) => byId.set(s.id, s))
   let inbound = null
   let outbound = null
+  // Independent of audioOnly: a share (or any video with audio) sends/receives both RTP streams
+  // at once, so actual audio throughput needs its own fields rather than only ever substituting
+  // for the video ones in audio-only mode.
+  let audioInbound = null
+  let audioOutbound = null
   let pair = null
   report.forEach((s) => {
     if (s.type === 'inbound-rtp' && s.kind === (audioOnly ? 'audio' : 'video')) inbound = busiest(inbound, s)
     else if (s.type === 'outbound-rtp' && s.kind === (audioOnly ? 'audio' : 'video')) outbound = busiest(outbound, s)
     else if (s.type === 'candidate-pair' && s.nominated && s.state === 'succeeded') pair = s
+    if (s.type === 'inbound-rtp' && s.kind === 'audio') audioInbound = busiest(audioInbound, s)
+    else if (s.type === 'outbound-rtp' && s.kind === 'audio') audioOutbound = busiest(audioOutbound, s)
   })
   const candidateTypes = pair ? [byId.get(pair.localCandidateId), byId.get(pair.remoteCandidateId)].map((c) => c?.candidateType) : []
   return {
@@ -40,6 +47,8 @@ export function readStats(report, {audioOnly = false} = {}) {
     relayed: candidateTypes.includes('relay'),
     inboundRtp: rtpSample(inbound, 'bytesReceived'),
     outboundRtp: rtpSample(outbound, 'bytesSent'),
+    audioInboundRtp: rtpSample(audioInbound, 'bytesReceived'),
+    audioOutboundRtp: rtpSample(audioOutbound, 'bytesSent'),
     inbound: inbound && {
       ssrc: inbound.ssrc,
       packetsReceived: inbound.packetsReceived || 0,

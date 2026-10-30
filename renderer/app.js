@@ -327,6 +327,7 @@ const blankSession = () => ({
   link: null, // {rttMs, relayed, sender, receiver} for the connection badge
   lastInbound: null,
   lastInboundRtp: null,
+  lastAudioInboundRtp: null,
   buffer: {bufferMs: MIN_BUFFER_MS, calmMs: 0},
   epoch: 0, // host: bumps whenever ffmpeg restarts, so viewers can tell a restart from a freeze
   steady: {since: null, epoch: 0}, // viewer: when the host's playback last became uninterrupted
@@ -1353,6 +1354,11 @@ async function sampleConnection() {
         }
         const sent = bitrateDelta(p.lastOutboundRtp, stats.outboundRtp)
         p.lastOutboundRtp = stats.outboundRtp
+        // audioOnly only ever substitutes audio for the fields above when there's no video at
+        // all; a share (video + audio together) needs its own, always-populated counter to
+        // answer "what bitrate is actually being achieved", not just the configured ceiling.
+        const audioSent = bitrateDelta(p.lastAudioOutboundRtp, stats.audioOutboundRtp)
+        p.lastAudioOutboundRtp = stats.audioOutboundRtp
         const before = p.quality
         p.quality = chooseSendQuality(p.quality, {
           receiver: p.receiver,
@@ -1366,6 +1372,7 @@ async function sampleConnection() {
           mediaKind: audioOnly ? 'audio' : 'video',
           sentBitrateBps: sent?.bitrateBps ?? null,
           sendIntervalMs: sent?.intervalMs ?? null,
+          audioSentBitrateBps: audioSent?.bitrateBps ?? null,
           feedbackAtMs: p.receiverAt ?? null,
           feedbackAgeMs: p.receiverAt != null ? Math.round(Math.max(0, performance.now() - p.receiverAt)) : null,
           feedbackFresh: Boolean(p.receiver && p.receiverAt !== before?.receiverAt),
@@ -1394,6 +1401,8 @@ async function sampleConnection() {
     const measured = inboundDelta(session.lastInbound, stats.inbound)
     const received = bitrateDelta(session.lastInboundRtp, stats.inboundRtp)
     session.lastInboundRtp = stats.inboundRtp
+    const audioReceived = bitrateDelta(session.lastAudioInboundRtp, stats.audioInboundRtp)
+    session.lastAudioInboundRtp = stats.audioInboundRtp
     const delta = measured && !steady ? {...measured, freezes: 0, droppedFrames: 0} : measured
     session.lastInbound = stats.inbound
     if (measured?.delayMs != null) session.playoutDelayMs = measured.delayMs
@@ -1421,6 +1430,7 @@ async function sampleConnection() {
       mediaKind: audioOnly ? 'audio' : 'video',
       receivedBitrateBps: received?.bitrateBps ?? null,
       receiveIntervalMs: received?.intervalMs ?? null,
+      audioReceivedBitrateBps: audioReceived?.bitrateBps ?? null,
       playback: {
         playing: Boolean(session.remote?.playing),
         loading: Boolean(session.remote?.loading),
@@ -1554,6 +1564,7 @@ function receiveState(value, peerId) {
     session.clock = null
     session.lastInbound = null
     session.lastInboundRtp = null
+    session.lastAudioInboundRtp = null
     session.playoutDelayMs = null
     session.buffer = {bufferMs: MIN_BUFFER_MS, calmMs: 0}
     session.catalog = new SubtitleCatalog()
