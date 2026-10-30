@@ -28,16 +28,33 @@ guard CommandLine.arguments.count > 1, let windowID = UInt32(CommandLine.argumen
 
 // A CMSampleBuffer's audio may arrive as one interleaved buffer or one buffer per channel
 // (planar), depending on the source. Handle both rather than assume either.
+//
+// AudioBufferList is a variable-length C struct (mNumberBuffers, then that many AudioBuffer
+// entries); MemoryLayout<AudioBufferList>.size only covers ONE entry. Allocating that fixed size
+// and then letting multi-buffer (e.g. planar stereo) audio write into it overflows the
+// allocation — this crashed the moment real stereo audio arrived. Query the size actually
+// needed first, the way Apple's own sample code does, and allocate exactly that.
 func extractPCM(from sampleBuffer: CMSampleBuffer) -> Data? {
     var blockBuffer: CMBlockBuffer?
-    let bufferListSize = MemoryLayout<AudioBufferList>.size
-    let rawBufferList = UnsafeMutableRawPointer.allocate(byteCount: bufferListSize, alignment: MemoryLayout<AudioBufferList>.alignment)
+    var bufferListSizeNeeded = 0
+    let sizeStatus = CMSampleBufferGetAudioBufferListWithRetainedBlockBuffer(
+        sampleBuffer,
+        bufferListSizeNeededOut: &bufferListSizeNeeded,
+        bufferListOut: nil,
+        bufferListSize: 0,
+        blockBufferAllocator: nil,
+        blockBufferMemoryAllocator: nil,
+        flags: 0,
+        blockBufferOut: nil
+    )
+    guard sizeStatus == noErr, bufferListSizeNeeded > 0 else { return nil }
+    let rawBufferList = UnsafeMutableRawPointer.allocate(byteCount: bufferListSizeNeeded, alignment: MemoryLayout<AudioBufferList>.alignment)
     defer { rawBufferList.deallocate() }
     let status = CMSampleBufferGetAudioBufferListWithRetainedBlockBuffer(
         sampleBuffer,
         bufferListSizeNeededOut: nil,
         bufferListOut: rawBufferList.assumingMemoryBound(to: AudioBufferList.self),
-        bufferListSize: bufferListSize,
+        bufferListSize: bufferListSizeNeeded,
         blockBufferAllocator: nil,
         blockBufferMemoryAllocator: nil,
         flags: kCMSampleBufferFlag_AudioBufferList_Assure16ByteAlignment,

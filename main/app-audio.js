@@ -49,7 +49,7 @@ function startSession(windowId) {
         sessions.set(id, session)
         session.silenceTimer = setTimeout(() => {
           if (session.receivedAnyData || session.done) return
-          session.error = 'No audio arrived within 5s of starting — this likely needs Screen & System Audio Recording permission granted to mac-app-audio in System Settings > Privacy & Security.'
+          session.error = 'No audio arrived within 5s of starting — check that the shared app is actually making sound, and that mac-app-audio has Screen & System Audio Recording permission in System Settings > Privacy & Security.'
           session.done = true
           wake()
         }, SILENCE_TIMEOUT_MS)
