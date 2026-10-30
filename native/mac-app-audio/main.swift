@@ -92,6 +92,12 @@ final class AudioOutput: NSObject, SCStreamOutput, SCStreamDelegate {
 }
 
 let output = AudioOutput()
+// Declared outside the do block and kept alive for the whole program, not just stream setup: a
+// local `let stream` inside the block goes out of scope — and ARC deallocates it — the moment
+// the block ends, which silently tore down capture right after "ready" printed. No crash, no
+// error, just a stream that stops existing: every callback-level check looked fine because
+// there was no longer a stream left to call back from.
+var stream: SCStream?
 
 do {
     let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: false)
@@ -120,9 +126,10 @@ do {
     config.height = 2
     config.minimumFrameInterval = CMTime(value: 1, timescale: 1)
 
-    let stream = SCStream(filter: filter, configuration: config, delegate: output)
-    try stream.addStreamOutput(output, type: .audio, sampleHandlerQueue: DispatchQueue(label: "mac-app-audio.output"))
-    try await stream.startCapture()
+    let newStream = SCStream(filter: filter, configuration: config, delegate: output)
+    try newStream.addStreamOutput(output, type: .audio, sampleHandlerQueue: DispatchQueue(label: "mac-app-audio.output"))
+    try await newStream.startCapture()
+    stream = newStream
     FileHandle.standardError.write("ready\n".data(using: .utf8)!)
 } catch {
     fail("could not start capture: \(error.localizedDescription)")
@@ -130,4 +137,13 @@ do {
 
 signal(SIGTERM) { _ in exit(0) }
 signal(SIGINT) { _ in exit(0) }
-dispatchMain()
+// Capture delivery runs on its own DispatchQueue via the delegate callback, not on this task, so
+// this just needs to never return (exit() in the signal handlers above ends the process outright
+// regardless). dispatchMain()/RunLoop.main.run() block the thread forever, which is unsupported
+// from the implicit async context a top-level `await` creates here — it crashed (EXC_BREAKPOINT
+// in Swift's async task completion machinery) the moment real audio started arriving and this
+// task's own work (briefly) resumed. An async-native wait avoids relying on a blocking call that
+// Swift's concurrency runtime was never told this thread would make.
+while true {
+    try? await Task.sleep(for: .seconds(3600))
+}
